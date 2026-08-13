@@ -1,0 +1,15 @@
+p1234
+cnode
+u1000
+PTCP
+n*:3000
+p5678
+cpostgres
+u999
+PTCP
+n127.0.0.1:5432
+p9012
+cSomeApp
+u1000
+PTCP
+n[::1]:8443
