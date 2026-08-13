@@ -63,6 +63,10 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newListCmd(app))
 	root.AddCommand(newKillCmd(app))
 
+	root.RunE = func(cmd *cobra.Command, args []string) error {
+		return runTUI(app)
+	}
+
 	return root
 }
 
