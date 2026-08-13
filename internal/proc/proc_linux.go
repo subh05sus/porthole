@@ -5,21 +5,37 @@ package proc
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/subh05sus/porthole/internal/scan/procfmt"
 )
 
-// clockTicksPerSecond assumes the near-universal Linux USER_HZ value of 100
-// (sysconf(_SC_CLK_TCK)). Reading the real value requires cgo or a raw
-// auxv/sysconf syscall wrapper this project deliberately avoids; 100 is
-// correct on essentially every x86/x86_64 distribution. Documented as a
-// known limitation for exotic kernels/architectures in TODO.md.
-const clockTicksPerSecond = 100
+// clockTicksPerSecond reads the kernel's real USER_HZ value (sysconf's
+// _SC_CLK_TCK) via `getconf CLK_TCK` — the same shellout pattern already
+// used on darwin for start-time lookups — rather than hardcoding the
+// near-universal x86/x86_64 value of 100, which this project previously
+// assumed to avoid a cgo dependency. Falls back to 100 if the shellout
+// fails for any reason (getconf missing, unexpected output), so a
+// transient failure degrades to the old behavior instead of breaking
+// uptime math. Resolved once per process via sync.OnceValue since the
+// value cannot change while porthole is running.
+var clockTicksPerSecond = sync.OnceValue(func() int {
+	out, err := exec.Command("getconf", "CLK_TCK").Output()
+	if err != nil {
+		return 100
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || n <= 0 {
+		return 100
+	}
+	return n
+})
 
 type linuxLookup struct{}
 
@@ -89,7 +105,7 @@ func processUptime(startTicks uint64) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	age := sysUptime - float64(startTicks)/float64(clockTicksPerSecond)
+	age := sysUptime - float64(startTicks)/float64(clockTicksPerSecond())
 	if age < 0 {
 		age = 0
 	}
