@@ -18,7 +18,7 @@ func Table(w io.Writer, services []scan.Service) error {
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "PORT\tPID\tPROCESS\tPROJECT\tUPTIME")
 	for _, s := range services {
-		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", s.Port, s.PID, processCell(s), projectCell(s), formatUptime(s.Uptime))
+		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", s.Port, s.PID, processCell(s), projectCell(s), FormatUptime(s.Uptime))
 	}
 	return tw.Flush()
 }
@@ -41,9 +41,9 @@ func projectCell(s scan.Service) string {
 	return s.Project
 }
 
-// formatUptime renders a duration the way the PRD's example table does:
+// FormatUptime renders a duration the way the PRD's example table does:
 // "2h 14m", "18m", "6d". Durations too small to resolve render as "-".
-func formatUptime(d time.Duration) string {
+func FormatUptime(d time.Duration) string {
 	if d <= 0 {
 		return "-"
 	}
