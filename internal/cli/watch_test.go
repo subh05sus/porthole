@@ -7,8 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/subh05sus/porthole/internal/notify"
 	"github.com/subh05sus/porthole/internal/scan"
 )
+
+// spyNotifier records every Notify call. Not synchronized: every test using
+// it drives runWatch via the same sleep-then-cancel-then-inspect pattern
+// already used for stdout/stderr assertions in this file, so the read
+// always happens after the writes it cares about have landed.
+type spyNotifier struct {
+	calls []string
+}
+
+func (s *spyNotifier) Notify(title, body string) {
+	s.calls = append(s.calls, title+": "+body)
+}
 
 // sequencedLister mirrors internal/scan's own test fake (unexported there),
 // returning a different scripted result on each successive call.
@@ -37,8 +50,9 @@ func TestRunWatchPrintsInitialTableThenDiffsOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
 
+	spy := &spyNotifier{}
 	done := make(chan error, 1)
-	go func() { done <- runWatch(ctx, app, time.Second, ticks) }()
+	go func() { done <- runWatch(ctx, app, time.Second, ticks, spy) }()
 
 	// Give the initial scan a moment to print, then trigger a second scan
 	// and cancel once its output should have landed.
@@ -68,6 +82,10 @@ func TestRunWatchPrintsInitialTableThenDiffsOnly(t *testing.T) {
 			t.Fatalf("nothing was removed, unexpected removal line %q in output %q", line, out)
 		}
 	}
+
+	if len(spy.calls) != 1 || !strings.Contains(spy.calls[0], ":8080") {
+		t.Fatalf("expected exactly one notification for the added service, got %+v", spy.calls)
+	}
 }
 
 func TestRunWatchStopsOnContextCancellation(t *testing.T) {
@@ -77,7 +95,7 @@ func TestRunWatchStopsOnContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runWatch(ctx, app, time.Second, make(chan time.Time)) }()
+	go func() { done <- runWatch(ctx, app, time.Second, make(chan time.Time), notify.NoOp{}) }()
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()

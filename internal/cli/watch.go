@@ -9,12 +9,16 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/subh05sus/porthole/internal/notify"
 	"github.com/subh05sus/porthole/internal/output"
 	"github.com/subh05sus/porthole/internal/scan"
 )
 
 func newWatchCmd(app *App) *cobra.Command {
-	var interval time.Duration
+	var (
+		interval   time.Duration
+		notifyFlag bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "watch",
@@ -22,10 +26,15 @@ func newWatchCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
-			return runWatch(ctx, app, interval, nil)
+			var notifier notify.Notifier = notify.NoOp{}
+			if notifyFlag {
+				notifier = notify.NewDefaultNotifier()
+			}
+			return runWatch(ctx, app, interval, nil, notifier)
 		},
 	}
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "how often to rescan")
+	cmd.Flags().BoolVar(&notifyFlag, "notify", false, "send a desktop notification when a new service starts listening")
 	return cmd
 }
 
@@ -33,8 +42,10 @@ func newWatchCmd(app *App) *cobra.Command {
 // cancelled: the first scan prints the full table as a baseline, and every
 // scan after that prints only what changed. Takes ticks directly (rather
 // than always going through the real timer) so tests can drive multiple
-// scans deterministically instead of waiting on wall-clock time.
-func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-chan time.Time) error {
+// scans deterministically instead of waiting on wall-clock time. notifier
+// fires only for newly-appeared services, never removals — matching the
+// plan's "notify when a watched port appears."
+func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-chan time.Time, notifier notify.Notifier) error {
 	events := scan.Watch(ctx, app.Lister, interval, ticks)
 
 	first := true
@@ -50,6 +61,7 @@ func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-cha
 		}
 		for _, s := range ev.Diff.Added {
 			fmt.Fprintf(app.Stdout, "+ %s on :%d (pid %d)\n", watchDisplayName(s), s.Port, s.PID)
+			notifier.Notify("porthole: new service", fmt.Sprintf("%s started listening on :%d", watchDisplayName(s), s.Port))
 		}
 		for _, s := range ev.Diff.Removed {
 			fmt.Fprintf(app.Stdout, "- %s on :%d (pid %d)\n", watchDisplayName(s), s.Port, s.PID)
