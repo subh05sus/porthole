@@ -19,6 +19,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmEscalateKey(msg)
 	case modeHelp:
 		return m.handleHelpKey(msg)
+	case modeDetail:
+		return m.handleDetailKey(msg)
 	case modeKilling:
 		// An operation is in flight; ignore input except quit rather than
 		// let it fall through to nav/kill handling and start a second one.
@@ -84,9 +86,41 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "K":
 		return m.beginKillConfirm(true)
+
+	case "enter":
+		if t := m.selected(); t != nil {
+			target := *t
+			m.detailTarget = &target
+			m.mode = modeDetail
+		}
+		return m, nil
 	}
 
 	return m, nil
+}
+
+func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "q" || msg.String() == "ctrl+c" {
+		m.quitting = true
+		return m, tea.Quit
+	}
+	m.mode = modeNormal
+	m.detailTarget = nil
+	return m, nil
+}
+
+// relatedSockets returns every service in m.services sharing target's PID
+// — PRD §5.4's detail pane calls for "the full socket list," and Service is
+// one row per socket rather than one row per process, so this groups them
+// by PID at render time rather than needing a new data model.
+func (m Model) relatedSockets(target scan.Service) []scan.Service {
+	var out []scan.Service
+	for _, s := range m.services {
+		if s.PID == target.PID {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // toggleSelection marks/unmarks the row under the cursor for multi-select

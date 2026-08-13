@@ -620,3 +620,46 @@ func TestBulkKillExecutesAllAndReportsAggregateOutcome(t *testing.T) {
 		t.Fatalf("expected aggregate success status, got %q", m.status)
 	}
 }
+
+func TestEnterOpensDetailPaneWithSnapshot(t *testing.T) {
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Cmdline: "node server.js", CWD: "/app", User: "sub", Owned: true},
+		{Port: 3001, PID: 1, Process: "node", Cmdline: "node server.js", CWD: "/app", User: "sub", Owned: true},
+	}
+	m := newTestModel(services, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	if m.mode != modeDetail {
+		t.Fatalf("expected modeDetail, got %v", m.mode)
+	}
+	if m.detailTarget == nil || m.detailTarget.PID != 1 {
+		t.Fatalf("expected detailTarget snapshot for pid 1, got %+v", m.detailTarget)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "node server.js") || !strings.Contains(view, "/app") {
+		t.Fatalf("expected detail view to show cmdline and cwd, got:\n%s", view)
+	}
+	if !strings.Contains(view, ":3000") || !strings.Contains(view, ":3001") {
+		t.Fatalf("expected both sockets sharing pid 1 to be listed, got:\n%s", view)
+	}
+}
+
+func TestAnyKeyClosesDetailPane(t *testing.T) {
+	m := newTestModel([]scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("x"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after closing detail pane, got %v", m.mode)
+	}
+	if m.detailTarget != nil {
+		t.Fatalf("expected detailTarget cleared after closing, got %+v", m.detailTarget)
+	}
+}

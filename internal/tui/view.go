@@ -24,6 +24,9 @@ func (m Model) View() string {
 	if m.mode == modeHelp {
 		return m.helpView()
 	}
+	if m.mode == modeDetail && m.detailTarget != nil {
+		return m.detailView()
+	}
 
 	var b strings.Builder
 

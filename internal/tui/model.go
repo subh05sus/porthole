@@ -38,6 +38,7 @@ const (
 	modeConfirmEscalate
 	modeKilling
 	modeHelp
+	modeDetail
 )
 
 // watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.
@@ -90,6 +91,11 @@ type Model struct {
 
 	fadingOut     []fadeEntry          // rows dissolving (kill success and/or watch removals)
 	recentlyAdded map[rowKey]time.Time // rows briefly highlighted after appearing in watch mode
+
+	// detailTarget is a snapshot copy (not a pointer into m.filtered) of
+	// the row the detail pane (enter) is showing, so it stays stable even
+	// if the underlying list refreshes while the pane is open.
+	detailTarget *scan.Service
 
 	watching     bool
 	watchCancel  context.CancelFunc
