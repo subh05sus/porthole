@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/subh05sus/porthole/internal/scan"
 	"github.com/subh05sus/porthole/internal/scan/scantest"
@@ -97,5 +98,36 @@ func TestListPropagatesScanError(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "boom") {
 		t.Fatalf("expected error surfaced on stderr: %q", stderr.String())
+	}
+}
+
+func TestListSinceFilter(t *testing.T) {
+	app, stdout, _ := newTestApp([]scan.Service{
+		{Port: 3000, Process: "fresh", Owned: true, Uptime: time.Minute},
+		{Port: 5432, Process: "old", Owned: true, Uptime: time.Hour},
+	})
+
+	code := Execute(app, []string{"list", "--since", "5m"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "fresh") || strings.Contains(out, "old") {
+		t.Fatalf("--since filter did not apply correctly: %q", out)
+	}
+}
+
+func TestListOnelineFlag(t *testing.T) {
+	app, stdout, _ := newTestApp([]scan.Service{
+		{Port: 3000, Process: "node", Owned: true},
+		{Port: 5432, Process: "postgres", Owned: false},
+	})
+
+	code := Execute(app, []string{"list", "--oneline"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "2 services · 1 locked" {
+		t.Fatalf("got %q, want %q", got, "2 services · 1 locked")
 	}
 }

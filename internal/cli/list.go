@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,8 +14,10 @@ import (
 func newListCmd(app *App) *cobra.Command {
 	var (
 		asJSON        bool
+		oneline       bool
 		portFilter    int
 		projectFilter string
+		since         time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -26,24 +29,30 @@ func newListCmd(app *App) *cobra.Command {
 				return err
 			}
 
-			services = filterServices(services, portFilter, projectFilter)
+			services = filterServices(services, portFilter, projectFilter, since)
 
-			if asJSON {
+			switch {
+			case asJSON:
 				return output.JSON(app.Stdout, services)
+			case oneline:
+				return output.OneLine(app.Stdout, services)
+			default:
+				return output.Table(app.Stdout, services)
 			}
-			return output.Table(app.Stdout, services)
 		},
 	}
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable JSON output")
+	cmd.Flags().BoolVar(&oneline, "oneline", false, "compact single-line summary, for status bars (tmux/zellij)")
 	cmd.Flags().IntVar(&portFilter, "port", 0, "filter to a single port")
 	cmd.Flags().StringVar(&projectFilter, "project", "", "filter by detected project name")
+	cmd.Flags().DurationVar(&since, "since", 0, "only show services started within this long ago (e.g. 5m)")
 
 	return cmd
 }
 
-func filterServices(services []scan.Service, port int, project string) []scan.Service {
-	if port == 0 && project == "" {
+func filterServices(services []scan.Service, port int, project string, since time.Duration) []scan.Service {
+	if port == 0 && project == "" && since == 0 {
 		return services
 	}
 	out := make([]scan.Service, 0, len(services))
@@ -52,6 +61,9 @@ func filterServices(services []scan.Service, port int, project string) []scan.Se
 			continue
 		}
 		if project != "" && !strings.EqualFold(s.Project, project) {
+			continue
+		}
+		if since != 0 && s.Uptime > since {
 			continue
 		}
 		out = append(out, s)
