@@ -43,14 +43,15 @@ func exitErr(code int, err error) *ExitError { return &ExitError{Code: code, Err
 
 // App holds every dependency a subcommand needs.
 type App struct {
-	Lister  scan.Lister
-	Killer  kill.Killer
-	Lookup  proc.Lookup     // used by restart to capture cmdline/cwd/env
-	Spawner restart.Spawner // used by restart to respawn
-	Config  config.Config   // protected ports, theme/animation preferences
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Lister      scan.Lister
+	Killer      kill.Killer
+	Lookup      proc.Lookup     // used by restart to capture cmdline/cwd/env
+	Spawner     restart.Spawner // used by restart to respawn
+	Config      config.Config   // protected ports, theme/animation preferences
+	HistoryPath string          // for `porthole history`; empty disables it
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 // NewRootCmd builds the porthole command tree against app's dependencies.
@@ -71,6 +72,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newWatchCmd(app))
 	root.AddCommand(newRestartCmd(app))
 	root.AddCommand(newDoctorCmd(app))
+	root.AddCommand(newHistoryCmd(app))
 
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return runTUI(app)

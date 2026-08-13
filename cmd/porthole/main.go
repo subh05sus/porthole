@@ -7,6 +7,7 @@ import (
 
 	"github.com/subh05sus/porthole/internal/cli"
 	"github.com/subh05sus/porthole/internal/config"
+	"github.com/subh05sus/porthole/internal/history"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/restart"
@@ -24,15 +25,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A failure to resolve the history path just disables history logging
+	// (HistoryPath stays "") rather than blocking startup — it's a
+	// best-effort convenience feature, not a critical one.
+	historyPath, _ := history.DefaultPath()
+	killer := &history.LoggingKiller{Inner: kill.NewDefaultKiller(), Path: historyPath}
+
 	app := &cli.App{
-		Lister:  scan.NewDefaultLister(),
-		Killer:  kill.NewDefaultKiller(),
-		Lookup:  proc.NewDefaultLookup(),
-		Spawner: restart.NewDefaultSpawner(),
-		Config:  cfg,
-		Stdin:   os.Stdin,
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
+		Lister:      scan.NewDefaultLister(),
+		Killer:      killer,
+		Lookup:      proc.NewDefaultLookup(),
+		Spawner:     restart.NewDefaultSpawner(),
+		Config:      cfg,
+		HistoryPath: historyPath,
+		Stdin:       os.Stdin,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
 	}
 	os.Exit(cli.Execute(app, os.Args[1:]))
 }
