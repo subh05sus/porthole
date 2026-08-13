@@ -10,17 +10,21 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/scan/procfmt"
 )
 
-type linuxLister struct{}
+type linuxLister struct {
+	lookup proc.Lookup
+}
 
 // NewDefaultLister returns the Linux scanner: parses /proc/net/tcp[6] for
 // listening sockets, then walks /proc/[pid]/fd/* to map socket inodes back
-// to PIDs, in one pass per PRD §7.2.
-func NewDefaultLister() Lister { return linuxLister{} }
+// to PIDs, in one pass per PRD §7.2. Process metadata (name, cmdline, cwd,
+// user, start time) for each resolved PID comes from internal/proc.
+func NewDefaultLister() Lister { return linuxLister{lookup: proc.NewDefaultLookup()} }
 
-func (linuxLister) List(ctx context.Context) ([]Service, error) {
+func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 	inodeToPID, err := buildInodeToPIDMap()
 	if err != nil {
 		return nil, err
@@ -57,6 +61,16 @@ func (linuxLister) List(ctx context.Context) ([]Service, error) {
 			}
 			if pid, ok := inodeToPID[e.Inode]; ok {
 				svc.PID = pid
+				if info, err := l.lookup.Lookup(pid); err == nil {
+					svc.Process = info.Process
+					svc.Cmdline = info.Cmdline
+					svc.User = info.User
+					svc.CWD = info.CWD
+					svc.StartTime = info.StartTime
+					svc.Uptime = info.Uptime
+				} else {
+					svc.ResolveErr = err
+				}
 			} else {
 				svc.ResolveErr = fmt.Errorf("scan: no process found for socket inode %d (permission denied or race)", e.Inode)
 			}
