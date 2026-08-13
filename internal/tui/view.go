@@ -127,9 +127,12 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 	if selected {
 		cursor = "▸ "
 	}
-	lock := "  "
-	if !s.Owned {
-		lock = "🔒 "
+	mark := "  "
+	switch {
+	case m.multiSelected[keyOf(s)]:
+		mark = "✓ "
+	case !s.Owned:
+		mark = "🔒 "
 	}
 
 	process := s.Process
@@ -141,7 +144,7 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 		project = "-"
 	}
 
-	row := cursor + lock + padColumns(
+	row := cursor + mark + padColumns(
 		fmt.Sprintf("%d", s.Port), colPort-4,
 		fmt.Sprintf("%d", s.PID), colPID,
 		process, colProcess,
@@ -212,6 +215,6 @@ func (m Model) hintBar() string {
 	case modeKilling:
 		return "working…"
 	default:
-		return "↑↓ nav · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
+		return "↑↓ nav · space select · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
 	}
 }

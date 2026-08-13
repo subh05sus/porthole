@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -75,6 +76,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeHelp
 		return m, nil
 
+	case " ":
+		return m.toggleSelection()
+
 	case "k":
 		return m.beginKillConfirm(false)
 
@@ -85,23 +89,85 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) beginKillConfirm(force bool) (tea.Model, tea.Cmd) {
+// toggleSelection marks/unmarks the row under the cursor for multi-select
+// bulk kill (PRD §5.4's "space" binding).
+func (m Model) toggleSelection() (tea.Model, tea.Cmd) {
 	target := m.selected()
 	if target == nil {
 		return m, nil
 	}
-	if !target.Owned {
+	if m.multiSelected == nil {
+		m.multiSelected = make(map[rowKey]bool)
+	}
+	key := keyOf(*target)
+	if m.multiSelected[key] {
+		delete(m.multiSelected, key)
+	} else {
+		m.multiSelected[key] = true
+	}
+	return m, nil
+}
+
+// bulkTargets resolves the current multi-selection against m.filtered. A
+// selected key with nothing matching it anymore (e.g. the process already
+// exited) is silently dropped rather than erroring.
+func (m Model) bulkTargets() []scan.Service {
+	if len(m.multiSelected) == 0 {
+		return nil
+	}
+	var out []scan.Service
+	for _, s := range m.filtered {
+		if m.multiSelected[keyOf(s)] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (m Model) beginKillConfirm(force bool) (tea.Model, tea.Cmd) {
+	targets := m.bulkTargets()
+	if len(targets) == 0 {
+		if t := m.selected(); t != nil {
+			targets = []scan.Service{*t}
+		}
+	}
+	if len(targets) == 0 {
+		return m, nil
+	}
+
+	var owned, locked []scan.Service
+	for _, t := range targets {
+		if t.Owned {
+			owned = append(owned, t)
+		} else {
+			locked = append(locked, t)
+		}
+	}
+	if len(owned) == 0 {
 		m.status = "needs elevated permissions, try running as Administrator/root"
 		return m, nil
 	}
+
 	m.mode = modeConfirmKill
-	m.pending = target
+	m.pendingBulk = owned
 	m.force = force
+
 	verb := "kill"
 	if force {
 		verb = "force kill"
 	}
-	m.status = verb + " " + target.Process + " on :" + portString(target.Port) + "? (y/n)"
+	switch {
+	case len(owned) == 1 && len(locked) == 0:
+		m.status = verb + " " + owned[0].Process + " on :" + portString(owned[0].Port) + "? (y/n)"
+	case len(owned) == 1:
+		m.status = fmt.Sprintf("%s %s on :%d? (%d locked rows skipped) (y/n)", verb, owned[0].Process, owned[0].Port, len(locked))
+	default:
+		m.status = fmt.Sprintf("%s %d selected services?", verb, len(owned))
+		if len(locked) > 0 {
+			m.status += fmt.Sprintf(" (%d locked rows skipped)", len(locked))
+		}
+		m.status += " (y/n)"
+	}
 	return m, nil
 }
 
@@ -129,14 +195,21 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		target := *m.pending
+		targets := m.pendingBulk
+		m.pendingBulk = nil
 		m.mode = modeKilling
 		m.killStart = m.clock()
-		m.status = "sending kill signal…"
-		return m, m.killCmd(target, m.force)
+		m.killCount = len(targets)
+
+		if len(targets) == 1 {
+			m.status = "sending kill signal…"
+			return m, m.killCmd(targets[0], m.force)
+		}
+		m.status = fmt.Sprintf("sending kill signal to %d services…", len(targets))
+		return m, m.bulkKillCmd(targets, m.force)
 	default:
 		m.mode = modeNormal
-		m.pending = nil
+		m.pendingBulk = nil
 		m.setEphemeralStatus("kill cancelled", ephemeralStatusDuration)
 		return m, nil
 	}

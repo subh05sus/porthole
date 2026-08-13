@@ -68,6 +68,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -499,5 +501,122 @@ func TestQuitWhileWatchingDoesNotPanic(t *testing.T) {
 	m = m2.(Model)
 	if !m.quitting || cmd == nil {
 		t.Fatalf("expected quitting=true and a tea.Quit command")
+	}
+}
+
+func TestSpaceTogglesMultiSelect(t *testing.T) {
+	m := newTestModel([]scan.Service{{Port: 3000, PID: 1, Owned: true}, {Port: 8080, PID: 2, Owned: true}}, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("space"))
+	m = m2.(Model)
+	if !m.multiSelected[rowKey{port: 3000, pid: 1}] {
+		t.Fatalf("expected row 0 selected after space, got %+v", m.multiSelected)
+	}
+
+	// Toggling again on the same row deselects it.
+	m2, _ = m.Update(key("space"))
+	m = m2.(Model)
+	if m.multiSelected[rowKey{port: 3000, pid: 1}] {
+		t.Fatalf("expected row 0 deselected after a second space")
+	}
+}
+
+func TestBulkKillConfirmationCoversAllSelectedRows(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Owned: true},
+		{Port: 8080, PID: 2, Process: "go", Owned: true},
+		{Port: 9090, PID: 3, Process: "python", Owned: true},
+	}
+	m := newTestModel(services, killer)
+	m = runCmd(t, m, m.Init())
+
+	// Select rows 0 and 1 (cursor starts at 0).
+	m2, _ := m.Update(key("space"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("down"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("space"))
+	m = m2.(Model)
+
+	m2, _ = m.Update(key("k"))
+	m = m2.(Model)
+	if m.mode != modeConfirmKill {
+		t.Fatalf("expected modeConfirmKill, got %v", m.mode)
+	}
+	if len(m.pendingBulk) != 2 {
+		t.Fatalf("expected 2 pending bulk targets, got %d: %+v", len(m.pendingBulk), m.pendingBulk)
+	}
+}
+
+func TestBulkKillSkipsLockedRowsWithoutBlockingOwnedOnes(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Owned: true},
+		{Port: 631, PID: 2, Process: "cupsd", Owned: false},
+	}
+	m := newTestModel(services, killer)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("space"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("down"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("space"))
+	m = m2.(Model)
+
+	m2, _ = m.Update(key("k"))
+	m = m2.(Model)
+	if len(m.pendingBulk) != 1 || m.pendingBulk[0].PID != 1 {
+		t.Fatalf("expected only the owned row pending, got %+v", m.pendingBulk)
+	}
+	if !strings.Contains(m.status, "locked rows skipped") {
+		t.Fatalf("expected status to mention skipped locked rows, got %q", m.status)
+	}
+}
+
+func TestBulkKillExecutesAllAndReportsAggregateOutcome(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Owned: true},
+		{Port: 8080, PID: 2, Process: "go", Owned: true},
+	}
+	m := newTestModel(services, killer)
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+	m = runCmd(t, m, m.Init())
+	fc.Advance(time.Second)
+
+	m2, _ := m.Update(key("space"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("down"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("space"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("k"))
+	m = m2.(Model)
+
+	m2, cmd := m.Update(key("y"))
+	m = m2.(Model)
+	if m.mode != modeKilling || m.killCount != 2 {
+		t.Fatalf("expected modeKilling with killCount=2, got mode=%v killCount=%d", m.mode, m.killCount)
+	}
+	m = runCmd(t, m, cmd)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after bulk kill completes, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 2 {
+		t.Fatalf("expected 2 Execute calls, got %d", len(killer.ExecuteCalls))
+	}
+	if len(m.fadingOut) != 2 {
+		t.Fatalf("expected both killed rows to be fading, got %d", len(m.fadingOut))
+	}
+	if len(m.multiSelected) != 0 {
+		t.Fatalf("expected selection cleared after bulk kill, got %+v", m.multiSelected)
+	}
+	if !strings.Contains(m.status, "terminated 2 services") {
+		t.Fatalf("expected aggregate success status, got %q", m.status)
 	}
 }

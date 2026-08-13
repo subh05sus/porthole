@@ -9,6 +9,7 @@ var helpEntries = []struct {
 	{"j", "navigate down (vim-style alias)"},
 	{"k", "kill selected (SIGTERM, then prompt to escalate)"},
 	{"K", "force kill (SIGKILL, still confirms)"},
+	{"space", "toggle multi-select for bulk kill"},
 	{"/", "fuzzy filter by port, process, or project"},
 	{"w", "toggle watch mode (live-updating list)"},
 	{"r", "manual refresh"},

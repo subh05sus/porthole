@@ -80,10 +80,13 @@ type Model struct {
 
 	filterInput textinput.Model
 
-	mode      mode
-	pending   *scan.Service // row awaiting kill/escalate/in-flight confirmation
-	force     bool          // whether the pending kill is the force (K) path
-	killStart time.Time     // when the in-flight kill/escalate began, for the spinner
+	mode          mode
+	pending       *scan.Service   // single row awaiting the interactive escalate-after-ignored-SIGTERM prompt
+	pendingBulk   []scan.Service  // row(s) awaiting the initial kill/force-kill y/n confirmation (1+ rows)
+	multiSelected map[rowKey]bool // multi-selected rows (space), independent of cursor position
+	force         bool            // whether the pending kill is the force (K) path
+	killStart     time.Time       // when the in-flight kill/escalate began, for the spinner
+	killCount     int             // how many targets the in-flight kill covers, for the status line
 
 	fadingOut     []fadeEntry          // rows dissolving (kill success and/or watch removals)
 	recentlyAdded map[rowKey]time.Time // rows briefly highlighted after appearing in watch mode
@@ -175,6 +178,36 @@ func (m Model) escalateCmd(target scan.Service) tea.Cmd {
 	}
 }
 
+type bulkKillResult struct {
+	target scan.Service
+	result kill.Result
+	err    error
+}
+
+type bulkKillMsg struct {
+	results []bulkKillResult
+}
+
+// bulkKillCmd kills multiple targets sequentially, auto-escalating past an
+// ignored SIGTERM for each (kill.Options.AutoEscalate) rather than prompting
+// interactively per-target — with N selected rows, a per-target y/n
+// escalation prompt doesn't scale, so bulk kill behaves like the CLI's
+// multi-port kill: keep going, report the aggregate outcome at the end.
+func (m Model) bulkKillCmd(targets []scan.Service, force bool) tea.Cmd {
+	killer := m.killer
+	return func() tea.Msg {
+		results := make([]bulkKillResult, 0, len(targets))
+		for _, t := range targets {
+			target := kill.Target{PID: t.PID, StartTime: t.StartTime, Owned: t.Owned}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			res, err := killer.Execute(ctx, target, kill.Options{Force: force, AutoEscalate: true})
+			cancel()
+			results = append(results, bulkKillResult{target: t, result: res, err: err})
+		}
+		return bulkKillMsg{results: results}
+	}
+}
+
 type tickMsg time.Time
 
 func (m Model) tickCmd() tea.Cmd {
@@ -197,6 +230,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case killResultMsg:
 		return m.handleKillResult(msg)
+
+	case bulkKillMsg:
+		return m.handleBulkKillResult(msg)
 
 	case watchEventMsg:
 		return m.handleWatchEvent(msg)
@@ -296,6 +332,9 @@ func (m Model) handleTick() (tea.Model, tea.Cmd) {
 		if m.force {
 			verb = "sending force kill"
 		}
+		if m.killCount > 1 {
+			verb = fmt.Sprintf("%s to %d services", verb, m.killCount)
+		}
 		m.status = fmt.Sprintf("%s… %c", verb, anim.SpinnerFrame(m.clock().Sub(m.killStart)))
 	}
 
@@ -390,6 +429,49 @@ func (m Model) handleKillResult(msg killResultMsg) (tea.Model, tea.Cmd) {
 		m.setEphemeralStatus(fmt.Sprintf("port :%d: process ignored kill signal", msg.target.Port), ephemeralStatusDuration)
 		return m, nil
 	}
+}
+
+// handleBulkKillResult processes the aggregate outcome of a multi-select
+// bulk kill. Every succeeded target gets its own fadeEntry (so each row
+// dissolves individually), but only the last one triggers the follow-up
+// rescan — they all started dissolving at the same instant, so they finish
+// together, and one rescan is enough to refresh the whole list.
+func (m Model) handleBulkKillResult(msg bulkKillMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	m.multiSelected = nil
+
+	now := m.clock()
+	killedCount := 0
+	failedCount := 0
+	for i, r := range msg.results {
+		if r.err == nil && (r.result.Status == kill.StatusKilled || r.result.Status == kill.StatusAlreadyDead) {
+			killedCount++
+			m.fadingOut = append(m.fadingOut, fadeEntry{
+				service:        r.target,
+				startedAt:      now,
+				triggersRescan: i == len(msg.results)-1,
+			})
+			continue
+		}
+		failedCount++
+	}
+
+	switch {
+	case failedCount == 0:
+		m.setEphemeralStatus(fmt.Sprintf("terminated %d services", killedCount), killDissolveDuration)
+	case killedCount == 0:
+		m.setEphemeralStatus(fmt.Sprintf("failed to terminate %d services", failedCount), ephemeralStatusDuration)
+	default:
+		m.setEphemeralStatus(fmt.Sprintf("terminated %d, failed %d", killedCount, failedCount), ephemeralStatusDuration)
+	}
+
+	if killedCount == 0 {
+		// Nothing is dissolving, so nothing would otherwise trigger a
+		// refresh — force one so a fully-failed bulk kill doesn't leave a
+		// stale list.
+		return m, m.scanCmd()
+	}
+	return m, nil
 }
 
 func (m Model) selected() *scan.Service {
