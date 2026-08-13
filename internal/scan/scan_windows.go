@@ -12,17 +12,23 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/subh05sus/porthole/internal/proc"
+	"github.com/subh05sus/porthole/internal/project"
 )
 
 type windowsLister struct {
-	lookup proc.Lookup
+	lookup   proc.Lookup
+	detector *project.Detector
 }
 
 // NewDefaultLister returns the Windows scanner: GetExtendedTcpTable from
 // iphlpapi.dll gives port->PID directly, no /proc-style inode walking
 // needed — the cleanest of the three platforms per PRD §7.2. Process
-// metadata beyond PID comes from internal/proc's Win32-based resolver.
-func NewDefaultLister() Lister { return windowsLister{lookup: proc.NewDefaultLookup()} }
+// metadata beyond PID comes from internal/proc's Win32-based resolver; the
+// project detector is constructed once and its session cache reused across
+// every List() call for the lifetime of this Lister.
+func NewDefaultLister() Lister {
+	return windowsLister{lookup: proc.NewDefaultLookup(), detector: project.NewDetector()}
+}
 
 var (
 	modIPHelper             = windows.NewLazySystemDLL("iphlpapi.dll")
@@ -103,7 +109,7 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 		}
 	}
 
-	return services, nil
+	return Enrich(services, l.detector), nil
 }
 
 func listTCP4() ([]Service, error) {

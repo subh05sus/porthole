@@ -11,18 +11,22 @@ import (
 	"strings"
 
 	"github.com/subh05sus/porthole/internal/proc"
+	"github.com/subh05sus/porthole/internal/project"
 	"github.com/subh05sus/porthole/internal/scan/procfmt"
 )
 
 type linuxLister struct {
-	lookup proc.Lookup
+	lookup   proc.Lookup
+	detector *project.Detector
 }
 
 // NewDefaultLister returns the Linux scanner: parses /proc/net/tcp[6] for
 // listening sockets, then walks /proc/[pid]/fd/* to map socket inodes back
 // to PIDs, in one pass per PRD §7.2. Process metadata (name, cmdline, cwd,
 // user, start time) for each resolved PID comes from internal/proc.
-func NewDefaultLister() Lister { return linuxLister{lookup: proc.NewDefaultLookup()} }
+func NewDefaultLister() Lister {
+	return linuxLister{lookup: proc.NewDefaultLookup(), detector: project.NewDetector()}
+}
 
 func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 	inodeToPID, err := buildInodeToPIDMap()
@@ -84,7 +88,7 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 			services = append(services, svc)
 		}
 	}
-	return services, nil
+	return Enrich(services, l.detector), nil
 }
 
 func readTCPTable(path string) ([]procfmt.TCPEntry, error) {

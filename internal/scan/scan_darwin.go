@@ -11,18 +11,22 @@ import (
 	"strings"
 
 	"github.com/subh05sus/porthole/internal/proc"
+	"github.com/subh05sus/porthole/internal/project"
 	"github.com/subh05sus/porthole/internal/scan/lsoffmt"
 )
 
 type darwinLister struct {
-	lookup proc.Lookup
+	lookup   proc.Lookup
+	detector *project.Detector
 }
 
 // NewDefaultLister returns the macOS scanner: shells out to lsof in field
 // output mode (machine-parseable, per PRD §7.2) rather than parsing the
 // human-readable table. Process metadata beyond name/PID comes from
 // internal/proc's ps/lsof-based resolver.
-func NewDefaultLister() Lister { return darwinLister{lookup: proc.NewDefaultLookup()} }
+func NewDefaultLister() Lister {
+	return darwinLister{lookup: proc.NewDefaultLookup(), detector: project.NewDetector()}
+}
 
 func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 	cmd := exec.CommandContext(ctx, "lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n", "-F", "pcnPu")
@@ -73,5 +77,5 @@ func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 		}
 		services = append(services, svc)
 	}
-	return services, nil
+	return Enrich(services, l.detector), nil
 }
