@@ -101,6 +101,74 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 	return Enrich(services, l.detector), nil
 }
 
+// SocketsForPID implements scan.SocketQuerier: every socket a process
+// holds, not just LISTEN-state/bound ones, resolved by re-parsing all four
+// /proc/net tables and keeping only rows whose inode belongs to this PID's
+// open file descriptors (rather than the whole-system walk buildInodeToPIDMap
+// does for a regular scan).
+func (l linuxLister) SocketsForPID(ctx context.Context, pid int) ([]Service, error) {
+	inodes, err := socketInodesForPID(pid)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Service
+	tables := []struct {
+		path string
+		kind Proto
+	}{
+		{"/proc/net/tcp", ProtoTCP},
+		{"/proc/net/tcp6", ProtoTCP6},
+		{"/proc/net/udp", ProtoUDP},
+		{"/proc/net/udp6", ProtoUDP6},
+	}
+	for _, table := range tables {
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		default:
+		}
+
+		entries, err := readTCPTable(table.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return out, err
+		}
+		for _, e := range entries {
+			if !inodes[e.Inode] {
+				continue
+			}
+			out = append(out, Service{
+				Port:  int(e.LocalPort),
+				Proto: table.kind,
+				Addr:  e.LocalAddr.String(),
+				PID:   pid,
+			})
+		}
+	}
+	return out, nil
+}
+
+func socketInodesForPID(pid int) (map[uint64]bool, error) {
+	fds, err := os.ReadDir(filepath.Join("/proc", strconv.Itoa(pid), "fd"))
+	if err != nil {
+		return nil, fmt.Errorf("scan: reading fds for pid %d: %w", pid, err)
+	}
+	m := make(map[uint64]bool)
+	for _, fd := range fds {
+		link, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "fd", fd.Name()))
+		if err != nil {
+			continue
+		}
+		if inode, ok := parseSocketInode(link); ok {
+			m[inode] = true
+		}
+	}
+	return m, nil
+}
+
 func readTCPTable(path string) ([]procfmt.TCPEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {

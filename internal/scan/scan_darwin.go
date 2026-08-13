@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/subh05sus/porthole/internal/proc"
@@ -62,6 +63,33 @@ func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 		}
 	}
 	return Enrich(services, l.detector), nil
+}
+
+// SocketsForPID implements scan.SocketQuerier: every socket lsof reports
+// for this one PID, TCP and UDP together and in any connection state —
+// `-a` ANDs the `-p` and `-i` selectors so this doesn't fall back to
+// listing every socket on the system.
+func (l darwinLister) SocketsForPID(ctx context.Context, pid int) ([]Service, error) {
+	sockets, err := runLsof(ctx, "-a", "-p", strconv.Itoa(pid), "-i", "-P", "-n", "-F", "pcnPu")
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Service, 0, len(sockets))
+	for _, s := range sockets {
+		proto := ProtoTCP
+		if strings.EqualFold(s.Proto, "UDP") {
+			proto = ProtoUDP
+		}
+		out = append(out, Service{
+			Port:    s.Port,
+			Proto:   proto,
+			Addr:    s.Host,
+			PID:     s.PID,
+			Process: s.Command,
+		})
+	}
+	return out, nil
 }
 
 func runLsof(ctx context.Context, args ...string) ([]lsoffmt.Socket, error) {

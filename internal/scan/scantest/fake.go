@@ -38,3 +38,22 @@ func (f *FakeLister) List(ctx context.Context) ([]scan.Service, error) {
 	copy(out, f.Services)
 	return out, nil
 }
+
+var _ scan.SocketQuerier = (*FakeQueryingLister)(nil)
+
+// FakeQueryingLister wraps FakeLister and additionally implements
+// scan.SocketQuerier, for tests exercising the on-demand full-socket-list
+// path (e.g. the TUI detail pane) that a plain FakeLister — deliberately —
+// doesn't trigger, since most callers don't need it.
+type FakeQueryingLister struct {
+	FakeLister
+	Sockets  map[int][]scan.Service // keyed by PID
+	QueryErr error
+}
+
+func (f *FakeQueryingLister) SocketsForPID(ctx context.Context, pid int) ([]scan.Service, error) {
+	if f.QueryErr != nil {
+		return nil, f.QueryErr
+	}
+	return f.Sockets[pid], nil
+}

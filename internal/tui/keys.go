@@ -101,6 +101,13 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			target := *t
 			m.detailTarget = &target
 			m.mode = modeDetail
+			if m.querier != nil {
+				m.detailSockets = nil
+				m.detailSocketsLoading = true
+				return m, m.detailSocketsCmd(target.PID)
+			}
+			m.detailSockets = m.relatedSockets(target)
+			m.detailSocketsLoading = false
 		}
 		return m, nil
 	}
@@ -115,6 +122,8 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeNormal
 	m.detailTarget = nil
+	m.detailSockets = nil
+	m.detailSocketsLoading = false
 	return m, nil
 }
 

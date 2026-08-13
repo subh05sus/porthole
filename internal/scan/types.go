@@ -64,3 +64,13 @@ type Service struct {
 type Lister interface {
 	List(ctx context.Context) ([]Service, error)
 }
+
+// SocketQuerier is an optional capability a Lister may additionally
+// implement: an on-demand query for every socket a specific PID holds, not
+// just the listening/bound ones a regular List() reports. It exists for the
+// TUI detail pane's expanded socket list — a broader per-process query isn't
+// worth paying for on every routine scan, so it's a separate call made only
+// when the detail pane opens.
+type SocketQuerier interface {
+	SocketsForPID(ctx context.Context, pid int) ([]Service, error)
+}

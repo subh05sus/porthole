@@ -41,6 +41,7 @@ const (
 	afINET6 = 23 // AF_INET6
 
 	tcpTableOwnerPIDListener = 3 // TCP_TABLE_OWNER_PID_LISTENER
+	tcpTableOwnerPIDAll      = 5 // TCP_TABLE_OWNER_PID_ALL — every connection, any state, not just LISTEN
 	udpTableOwnerPID         = 1 // UDP_TABLE_OWNER_PID
 )
 
@@ -90,7 +91,7 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 		return nil, ctx.Err()
 	default:
 	}
-	v4, err := listTCP4()
+	v4, err := listTCP4(tcpTableOwnerPIDListener)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +102,7 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 		return services, ctx.Err()
 	default:
 	}
-	v6, err := listTCP6()
+	v6, err := listTCP6(tcpTableOwnerPIDListener)
 	if err != nil {
 		return services, err
 	}
@@ -151,8 +152,38 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 	return Enrich(services, l.detector), nil
 }
 
-func listTCP4() ([]Service, error) {
-	buf, numEntries, err := fetchTCPTable(afINET)
+// SocketsForPID implements scan.SocketQuerier: every TCP connection (any
+// state, via TCP_TABLE_OWNER_PID_ALL rather than the LISTENER-only class
+// List() uses) and every UDP-bound socket, filtered to this one PID.
+func (l windowsLister) SocketsForPID(ctx context.Context, pid int) ([]Service, error) {
+	var out []Service
+
+	for _, fn := range []func() ([]Service, error){
+		func() ([]Service, error) { return listTCP4(tcpTableOwnerPIDAll) },
+		func() ([]Service, error) { return listTCP6(tcpTableOwnerPIDAll) },
+		listUDP4,
+		listUDP6,
+	} {
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		default:
+		}
+		services, err := fn()
+		if err != nil {
+			return out, err
+		}
+		for _, s := range services {
+			if s.PID == pid {
+				out = append(out, s)
+			}
+		}
+	}
+	return out, nil
+}
+
+func listTCP4(tableClass uintptr) ([]Service, error) {
+	buf, numEntries, err := fetchTCPTable(afINET, tableClass)
 	if err != nil {
 		return nil, err
 	}
@@ -171,8 +202,8 @@ func listTCP4() ([]Service, error) {
 	return services, nil
 }
 
-func listTCP6() ([]Service, error) {
-	buf, numEntries, err := fetchTCPTable(afINET6)
+func listTCP6(tableClass uintptr) ([]Service, error) {
+	buf, numEntries, err := fetchTCPTable(afINET6, tableClass)
 	if err != nil {
 		return nil, err
 	}
@@ -266,10 +297,10 @@ func fetchUDPTable(af uintptr) ([]byte, uint32, error) {
 // buffer size, once to fill it. Returns the raw buffer (numEntries as its
 // first 4 bytes, per MIB_TCPTABLE_OWNER_PID/MIB_TCP6TABLE_OWNER_PID) and the
 // entry count.
-func fetchTCPTable(af uintptr) ([]byte, uint32, error) {
+func fetchTCPTable(af, tableClass uintptr) ([]byte, uint32, error) {
 	var size uint32
 	r, _, _ := procGetExtendedTCPTable.Call(
-		0, uintptr(unsafe.Pointer(&size)), 0, af, tcpTableOwnerPIDListener, 0,
+		0, uintptr(unsafe.Pointer(&size)), 0, af, tableClass, 0,
 	)
 	if windows.Errno(r) != windows.ERROR_INSUFFICIENT_BUFFER {
 		return nil, 0, fmt.Errorf("scan: GetExtendedTcpTable sizing call failed: %w", windows.Errno(r))
@@ -280,7 +311,7 @@ func fetchTCPTable(af uintptr) ([]byte, uint32, error) {
 
 	buf := make([]byte, size)
 	r, _, _ = procGetExtendedTCPTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0, af, tcpTableOwnerPIDListener, 0,
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0, af, tableClass, 0,
 	)
 	if r != 0 {
 		return nil, 0, fmt.Errorf("scan: GetExtendedTcpTable failed: %w", windows.Errno(r))

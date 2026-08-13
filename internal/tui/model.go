@@ -107,6 +107,16 @@ type Model struct {
 	// if the underlying list refreshes while the pane is open.
 	detailTarget *scan.Service
 
+	// querier is the optional scan.SocketQuerier capability (nil if the
+	// injected Lister doesn't implement it), used for the detail pane's
+	// on-demand full socket list. detailSockets/detailSocketsLoading track
+	// that in-flight/completed query; detailSockets falls back to
+	// relatedSockets (listening-only, from the last regular scan) when
+	// querier is nil or the query fails.
+	querier              scan.SocketQuerier
+	detailSockets        []scan.Service
+	detailSocketsLoading bool
+
 	pendingRestart *scan.Service // row awaiting the R confirmation prompt
 	restartStart   time.Time     // when the in-flight restart began, for the spinner
 
@@ -141,6 +151,7 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 	ti.Prompt = "/ "
 
 	clock := time.Now
+	querier, _ := lister.(scan.SocketQuerier)
 	return Model{
 		lister:      lister,
 		killer:      killer,
@@ -153,6 +164,7 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 		status:      "scanning sockets",
 		scanning:    true,
 		scanStart:   clock(),
+		querier:     querier,
 	}
 }
 
@@ -289,6 +301,43 @@ func (m Model) bulkKillCmd(targets []scan.Service, force bool) tea.Cmd {
 	}
 }
 
+type detailSocketsMsg struct {
+	pid     int
+	sockets []scan.Service
+	err     error
+}
+
+// detailSocketsCmd fetches the full socket list for pid via the injected
+// SocketQuerier (off the UI thread, same discipline as every other OS
+// interaction here). Only called when m.querier is non-nil — callers fall
+// back to relatedSockets otherwise.
+func (m Model) detailSocketsCmd(pid int) tea.Cmd {
+	querier := m.querier
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
+		defer cancel()
+		sockets, err := querier.SocketsForPID(ctx, pid)
+		return detailSocketsMsg{pid: pid, sockets: sockets, err: err}
+	}
+}
+
+func (m Model) handleDetailSockets(msg detailSocketsMsg) (tea.Model, tea.Cmd) {
+	m.detailSocketsLoading = false
+	if m.detailTarget == nil || msg.pid != m.detailTarget.PID {
+		// Pane was closed or reopened on a different row before this
+		// landed — drop it rather than showing stale sockets.
+		return m, nil
+	}
+	if msg.err != nil {
+		// Fall back to what the last regular scan already knows rather
+		// than showing nothing.
+		m.detailSockets = m.relatedSockets(*m.detailTarget)
+		return m, nil
+	}
+	m.detailSockets = msg.sockets
+	return m, nil
+}
+
 type tickMsg time.Time
 
 func (m Model) tickCmd() tea.Cmd {
@@ -321,6 +370,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case restartResultMsg:
 		return m.handleRestartResult(msg)
+
+	case detailSocketsMsg:
+		return m.handleDetailSockets(msg)
 
 	case watchEventMsg:
 		return m.handleWatchEvent(msg)

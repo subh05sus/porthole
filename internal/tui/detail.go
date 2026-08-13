@@ -36,12 +36,18 @@ func (m Model) detailView() string {
 		b.WriteString("\n")
 	}
 
-	sockets := m.relatedSockets(s)
 	b.WriteString("\n")
-	b.WriteString(m.th.Muted.Render(fmt.Sprintf("sockets held by this process (%d):", len(sockets))))
-	b.WriteString("\n")
-	for _, sock := range sockets {
-		b.WriteString(fmt.Sprintf("  %s :%d (%s)\n", sock.Proto, sock.Port, nonEmpty(sock.Addr, "-")))
+	switch {
+	case m.detailSocketsLoading:
+		b.WriteString(m.th.Muted.Render("sockets held by this process: loading…"))
+		b.WriteString("\n")
+	default:
+		sockets := m.detailSockets
+		b.WriteString(m.th.Muted.Render(fmt.Sprintf("sockets held by this process (%d):", len(sockets))))
+		b.WriteString("\n")
+		for _, sock := range sockets {
+			b.WriteString(fmt.Sprintf("  %s :%d (%s)\n", sock.Proto, sock.Port, nonEmpty(sock.Addr, "-")))
+		}
 	}
 
 	b.WriteString("\n")

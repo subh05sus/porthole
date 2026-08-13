@@ -667,6 +667,60 @@ func TestAnyKeyClosesDetailPane(t *testing.T) {
 	}
 }
 
+func TestEnterQueriesFullSocketListWhenQuerierAvailable(t *testing.T) {
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	lister := &scantest.FakeQueryingLister{
+		FakeLister: scantest.FakeLister{Services: services},
+		Sockets: map[int][]scan.Service{
+			1: {
+				{PID: 1, Proto: scan.ProtoTCP, Port: 3000, Addr: "127.0.0.1"},
+				{PID: 1, Proto: scan.ProtoTCP, Port: 54321, Addr: "93.184.216.34"}, // outbound, not in a regular scan
+			},
+		},
+	}
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m = runCmd(t, m, m.Init())
+
+	m2, cmd := m.Update(key("enter"))
+	m = m2.(Model)
+	if !m.detailSocketsLoading {
+		t.Fatalf("expected detailSocketsLoading while the query is in flight")
+	}
+	if !strings.Contains(m.View(), "loading") {
+		t.Fatalf("expected loading indicator in detail view, got:\n%s", m.View())
+	}
+
+	m = runCmd(t, m, cmd)
+	if m.detailSocketsLoading {
+		t.Fatalf("expected detailSocketsLoading cleared once the query completes")
+	}
+	view := m.View()
+	if !strings.Contains(view, ":54321") {
+		t.Fatalf("expected the queried outbound socket (not in a regular scan) to appear, got:\n%s", view)
+	}
+}
+
+func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	lister := &scantest.FakeQueryingLister{
+		FakeLister: scantest.FakeLister{Services: services},
+		QueryErr:   errFake,
+	}
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m = runCmd(t, m, m.Init())
+
+	m2, cmd := m.Update(key("enter"))
+	m = m2.(Model)
+	m = runCmd(t, m, cmd)
+
+	if m.detailSocketsLoading {
+		t.Fatalf("expected loading cleared after a failed query")
+	}
+	if !strings.Contains(m.View(), ":3000") {
+		t.Fatalf("expected fallback to the last regular scan's sockets, got:\n%s", m.View())
+	}
+}
+
 func TestSudoBannerForMajorityUnresolved(t *testing.T) {
 	services := []scan.Service{
 		{Port: 1, ResolveErr: errFake},
