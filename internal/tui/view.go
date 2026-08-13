@@ -218,9 +218,9 @@ func (m Model) hintBar() string {
 	switch m.mode {
 	case modeFilter:
 		return "enter apply · esc cancel"
-	case modeConfirmKill, modeConfirmEscalate:
+	case modeConfirmKill, modeConfirmEscalate, modeConfirmRestart:
 		return "y confirm · any other key cancel"
-	case modeKilling:
+	case modeKilling, modeRestarting:
 		return "working…"
 	default:
 		return "↑↓ nav · space select · k kill · K force · / filter · w watch · r refresh · ? help · q quit"

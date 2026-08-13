@@ -9,6 +9,7 @@ var helpEntries = []struct {
 	{"j", "navigate down (vim-style alias)"},
 	{"k", "kill selected (SIGTERM, then prompt to escalate)"},
 	{"K", "force kill (SIGKILL, still confirms)"},
+	{"R", "kill and respawn with the same command, cwd, and environment"},
 	{"space", "toggle multi-select for bulk kill"},
 	{"enter", "detail pane: full cmdline, cwd, user, socket list"},
 	{"/", "fuzzy filter by port, process, or project"},

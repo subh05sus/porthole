@@ -9,6 +9,8 @@ import (
 
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/kill/killtest"
+	"github.com/subh05sus/porthole/internal/proc/proctest"
+	"github.com/subh05sus/porthole/internal/restart/restarttest"
 	"github.com/subh05sus/porthole/internal/scan"
 	"github.com/subh05sus/porthole/internal/scan/scantest"
 	"github.com/subh05sus/porthole/internal/tui/theme"
@@ -27,7 +29,7 @@ func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, theme.New(true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
 }
 
 // runCmd executes a tea.Cmd synchronously and feeds its resulting Msg back
@@ -103,7 +105,7 @@ func TestInitTriggersScanAndPopulatesServices(t *testing.T) {
 }
 
 func TestScanErrorSetsStatus(t *testing.T) {
-	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, theme.New(true))
+	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
 	m = runCmd(t, m, m.Init())
 
 	if m.scanErr == nil {
@@ -699,7 +701,7 @@ func TestSudoBannerForEmptyServicesIsEmpty(t *testing.T) {
 func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
 	killer := &killtest.FakeKiller{}
 	lister := &scantest.FakeLister{Services: []scan.Service{{Port: 1, ResolveErr: errFake}, {Port: 2, ResolveErr: errFake}}}
-	m := New(lister, killer, theme.New(true))
+	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
 	m = runCmd(t, m, m.Init())
 
 	if m.sudoBanner == "" {
@@ -714,4 +716,115 @@ func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
 	if m.sudoBanner == "" {
 		t.Fatalf("expected the startup banner to persist across later scans")
 	}
+}
+
+func newRestartTestModel(services []scan.Service, killer *killtest.FakeKiller, lookup *proctest.FakeLookup, spawner *restarttest.FakeSpawner) Model {
+	lister := &scantest.FakeLister{Services: services}
+	if killer == nil {
+		killer = &killtest.FakeKiller{}
+	}
+	if lookup == nil {
+		lookup = &proctest.FakeLookup{}
+	}
+	if spawner == nil {
+		spawner = &restarttest.FakeSpawner{}
+	}
+	return New(lister, killer, lookup, spawner, theme.New(true))
+}
+
+func TestRestartConfirmFlowSuccess(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	lookup := &proctest.FakeLookup{Info: procInfoWithArgv()}
+	spawner := &restarttest.FakeSpawner{}
+	m := newRestartTestModel([]scan.Service{{Port: 3000, PID: 111, Process: "node", Owned: true}}, killer, lookup, spawner)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("R"))
+	m = m2.(Model)
+	if m.mode != modeConfirmRestart {
+		t.Fatalf("expected modeConfirmRestart, got %v", m.mode)
+	}
+
+	m2, cmd := m.Update(key("y"))
+	m = m2.(Model)
+	if m.mode != modeRestarting {
+		t.Fatalf("expected modeRestarting, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatalf("expected a restart command to be returned")
+	}
+	m = runCmd(t, m, cmd)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after successful restart, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 1 || killer.ExecuteCalls[0].Target.PID != 111 {
+		t.Fatalf("expected Execute called with pid 111, got %+v", killer.ExecuteCalls)
+	}
+	if len(spawner.Calls) != 1 {
+		t.Fatalf("expected Spawn called once, got %d", len(spawner.Calls))
+	}
+	if !strings.Contains(m.status, "restarted node on :3000") {
+		t.Fatalf("got status %q", m.status)
+	}
+}
+
+func TestRestartConfirmDeclineDoesNotCallExecuteOrSpawn(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	spawner := &restarttest.FakeSpawner{}
+	m := newRestartTestModel([]scan.Service{{Port: 3000, PID: 111, Process: "node", Owned: true}}, killer, nil, spawner)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("R"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("n"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 0 || len(spawner.Calls) != 0 {
+		t.Fatalf("declined restart must not call Execute or Spawn")
+	}
+}
+
+func TestRestartOnUnownedRowRefusesWithoutConfirming(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	m := newRestartTestModel([]scan.Service{{Port: 631, Process: "cupsd", Owned: false}}, killer, nil, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("R"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal, got %v", m.mode)
+	}
+}
+
+func TestRestartCaptureFailureShowsError(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	lookup := &proctest.FakeLookup{Err: errFake}
+	spawner := &restarttest.FakeSpawner{}
+	m := newRestartTestModel([]scan.Service{{Port: 3000, PID: 111, Process: "node", Owned: true}}, killer, lookup, spawner)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("R"))
+	m = m2.(Model)
+	m2, cmd := m.Update(key("y"))
+	m = m2.(Model)
+	m = runCmd(t, m, cmd)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after a failed capture, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("must never attempt to kill if capture failed, got %d Execute calls", len(killer.ExecuteCalls))
+	}
+	if !strings.Contains(m.status, "restart failed") {
+		t.Fatalf("got status %q", m.status)
+	}
+}
+
+func procInfoWithArgv() proctest.Info {
+	return proctest.Info{Cmdline: "node server.js", Argv: []string{"node", "server.js"}, CWD: "/app"}
 }

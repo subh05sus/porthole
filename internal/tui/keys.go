@@ -21,7 +21,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHelpKey(msg)
 	case modeDetail:
 		return m.handleDetailKey(msg)
-	case modeKilling:
+	case modeConfirmRestart:
+		return m.handleConfirmRestartKey(msg)
+	case modeKilling, modeRestarting:
 		// An operation is in flight; ignore input except quit rather than
 		// let it fall through to nav/kill handling and start a second one.
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
@@ -86,6 +88,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "K":
 		return m.beginKillConfirm(true)
+
+	case "R":
+		return m.beginRestartConfirm()
 
 	case "enter":
 		if t := m.selected(); t != nil {
@@ -203,6 +208,43 @@ func (m Model) beginKillConfirm(force bool) (tea.Model, tea.Cmd) {
 		m.status += " (y/n)"
 	}
 	return m, nil
+}
+
+// beginRestartConfirm starts the restart confirmation flow for the row
+// under the cursor. Single-target only — restart is inherently per-process
+// (FUTURE_PLANS.md v1.2 never mentions a bulk form), so it doesn't consult
+// multiSelected the way beginKillConfirm does.
+func (m Model) beginRestartConfirm() (tea.Model, tea.Cmd) {
+	target := m.selected()
+	if target == nil {
+		return m, nil
+	}
+	if !target.Owned {
+		m.status = "needs elevated permissions, try running as Administrator/root"
+		return m, nil
+	}
+
+	t := *target
+	m.mode = modeConfirmRestart
+	m.pendingRestart = &t
+	m.status = "restart " + t.Process + " on :" + portString(t.Port) + "? (y/n)"
+	return m, nil
+}
+
+func (m Model) handleConfirmRestartKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		target := *m.pendingRestart
+		m.mode = modeRestarting
+		m.restartStart = m.clock()
+		m.status = "restarting…"
+		return m, m.restartCmd(target)
+	default:
+		m.mode = modeNormal
+		m.pendingRestart = nil
+		m.setEphemeralStatus("restart cancelled", ephemeralStatusDuration)
+		return m, nil
+	}
 }
 
 func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

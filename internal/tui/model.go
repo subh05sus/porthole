@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/subh05sus/porthole/internal/kill"
+	"github.com/subh05sus/porthole/internal/proc"
+	"github.com/subh05sus/porthole/internal/restart"
 	"github.com/subh05sus/porthole/internal/scan"
 	"github.com/subh05sus/porthole/internal/tui/anim"
 	"github.com/subh05sus/porthole/internal/tui/theme"
@@ -39,6 +41,8 @@ const (
 	modeKilling
 	modeHelp
 	modeDetail
+	modeConfirmRestart
+	modeRestarting
 )
 
 // watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.
@@ -67,9 +71,11 @@ type fadeEntry struct {
 // scanner or killer directly on this goroutine — every OS interaction is
 // dispatched as a tea.Cmd so the UI thread never blocks (PRD §8.3).
 type Model struct {
-	lister scan.Lister
-	killer kill.Killer
-	th     theme.Theme
+	lister  scan.Lister
+	killer  kill.Killer
+	lookup  proc.Lookup
+	spawner restart.Spawner
+	th      theme.Theme
 
 	// clock is injectable so animation timing is deterministic in tests
 	// (see model_test.go) instead of racing real wall-clock time.
@@ -97,6 +103,9 @@ type Model struct {
 	// if the underlying list refreshes while the pane is open.
 	detailTarget *scan.Service
 
+	pendingRestart *scan.Service // row awaiting the R confirmation prompt
+	restartStart   time.Time     // when the in-flight restart began, for the spinner
+
 	watching     bool
 	watchCancel  context.CancelFunc
 	watchEvents  <-chan scan.Event
@@ -120,9 +129,9 @@ type Model struct {
 	quitting      bool
 }
 
-// New builds a Model. lister and killer are injected so this whole package
-// can be tested without a real OS (see model_test.go).
-func New(lister scan.Lister, killer kill.Killer, th theme.Theme) Model {
+// New builds a Model. Dependencies are injected so this whole package can
+// be tested without a real OS (see model_test.go).
+func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner restart.Spawner, th theme.Theme) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter by port, process, or project"
 	ti.Prompt = "/ "
@@ -131,6 +140,8 @@ func New(lister scan.Lister, killer kill.Killer, th theme.Theme) Model {
 	return Model{
 		lister:      lister,
 		killer:      killer,
+		lookup:      lookup,
+		spawner:     spawner,
 		th:          th,
 		clock:       clock,
 		filterInput: ti,
@@ -189,6 +200,58 @@ func (m Model) escalateCmd(target scan.Service) tea.Cmd {
 		res, err := killer.Escalate(ctx, t)
 		return killResultMsg{target: target, force: true, result: res, err: err}
 	}
+}
+
+type restartResultMsg struct {
+	target scan.Service
+	err    error
+}
+
+// restartCmd captures a respawn plan, kills the target, and respawns it —
+// all inside one tea.Cmd closure (off the UI thread), same discipline as
+// every other OS interaction in this model. Mirrors internal/cli/restart.go's
+// runRestart: capture before kill (nothing left to capture from a dead
+// process), only spawn after confirming the kill actually succeeded.
+func (m Model) restartCmd(target scan.Service) tea.Cmd {
+	lookup := m.lookup
+	killer := m.killer
+	spawner := m.spawner
+	return func() tea.Msg {
+		plan, err := restart.Capture(lookup, target)
+		if err != nil {
+			return restartResultMsg{target: target, err: err}
+		}
+
+		t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res, err := killer.Execute(ctx, t, kill.Options{AutoEscalate: true})
+		if err != nil {
+			return restartResultMsg{target: target, err: err}
+		}
+		if res.Status != kill.StatusKilled && res.Status != kill.StatusAlreadyDead {
+			return restartResultMsg{target: target, err: fmt.Errorf("process ignored kill signal, not restarting")}
+		}
+
+		if err := spawner.Spawn(plan); err != nil {
+			return restartResultMsg{target: target, err: fmt.Errorf("killed but failed to respawn: %w", err)}
+		}
+		return restartResultMsg{target: target}
+	}
+}
+
+func (m Model) handleRestartResult(msg restartResultMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	m.pendingRestart = nil
+
+	if msg.err != nil {
+		m.setEphemeralStatus(fmt.Sprintf("restart failed for %s on :%d: %v", msg.target.Process, msg.target.Port, msg.err), ephemeralStatusDuration)
+		return m, nil
+	}
+
+	m.fadingOut = append(m.fadingOut, fadeEntry{service: msg.target, startedAt: m.clock(), triggersRescan: true})
+	m.setEphemeralStatus(fmt.Sprintf("restarted %s on :%d", msg.target.Process, msg.target.Port), killDissolveDuration)
+	return m, nil
 }
 
 type bulkKillResult struct {
@@ -250,6 +313,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bulkKillMsg:
 		return m.handleBulkKillResult(msg)
+
+	case restartResultMsg:
+		return m.handleRestartResult(msg)
 
 	case watchEventMsg:
 		return m.handleWatchEvent(msg)
@@ -353,6 +419,8 @@ func (m Model) handleTick() (tea.Model, tea.Cmd) {
 			verb = fmt.Sprintf("%s to %d services", verb, m.killCount)
 		}
 		m.status = fmt.Sprintf("%s… %c", verb, anim.SpinnerFrame(m.clock().Sub(m.killStart)))
+	case m.mode == modeRestarting:
+		m.status = fmt.Sprintf("restarting… %c", anim.SpinnerFrame(m.clock().Sub(m.restartStart)))
 	}
 
 	return m, tea.Batch(cmd, m.tickCmd())

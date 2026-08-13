@@ -24,7 +24,7 @@ func runTUI(app *App) error {
 
 	forcePlain := !tui.EnableVirtualTerminal()
 	th := theme.New(forcePlain)
-	model := tui.New(app.Lister, app.Killer, th)
+	model := tui.New(app.Lister, app.Killer, app.Lookup, app.Spawner, th)
 
 	p := tea.NewProgram(model, tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout))
 	_, err := p.Run()
