@@ -10,14 +10,19 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/subh05sus/porthole/internal/proc"
 )
 
-type windowsLister struct{}
+type windowsLister struct {
+	lookup proc.Lookup
+}
 
 // NewDefaultLister returns the Windows scanner: GetExtendedTcpTable from
 // iphlpapi.dll gives port->PID directly, no /proc-style inode walking
-// needed — the cleanest of the three platforms per PRD §7.2.
-func NewDefaultLister() Lister { return windowsLister{} }
+// needed — the cleanest of the three platforms per PRD §7.2. Process
+// metadata beyond PID comes from internal/proc's Win32-based resolver.
+func NewDefaultLister() Lister { return windowsLister{lookup: proc.NewDefaultLookup()} }
 
 var (
 	modIPHelper             = windows.NewLazySystemDLL("iphlpapi.dll")
@@ -54,7 +59,7 @@ type mibTCP6RowOwnerPID struct {
 	OwningPid     uint32
 }
 
-func (windowsLister) List(ctx context.Context) ([]Service, error) {
+func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 	var services []Service
 
 	select {
@@ -78,6 +83,20 @@ func (windowsLister) List(ctx context.Context) ([]Service, error) {
 		return services, err
 	}
 	services = append(services, v6...)
+
+	for i := range services {
+		info, err := l.lookup.Lookup(services[i].PID)
+		if err != nil {
+			services[i].ResolveErr = err
+			continue
+		}
+		services[i].Process = info.Process
+		services[i].Cmdline = info.Cmdline
+		services[i].User = info.User
+		services[i].CWD = info.CWD
+		services[i].StartTime = info.StartTime
+		services[i].Uptime = info.Uptime
+	}
 
 	return services, nil
 }
