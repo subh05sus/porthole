@@ -856,6 +856,23 @@ func TestRestartOnUnownedRowRefusesWithoutConfirming(t *testing.T) {
 	}
 }
 
+func TestRestartOnContainerBackedRowRefusesWithoutConfirming(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	services := []scan.Service{{Port: 5434, Process: "com.docker.backend", Owned: true, Container: "db", ContainerID: "abc123"}}
+	m := newRestartTestModel(services, killer, nil, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("R"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal (refused without confirming), got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "docker restart db") {
+		t.Fatalf("expected a docker-restart pointer in the status, got %q", m.status)
+	}
+}
+
 func TestRestartCaptureFailureShowsError(t *testing.T) {
 	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
 	lookup := &proctest.FakeLookup{Err: errFake}

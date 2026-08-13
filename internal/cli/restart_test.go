@@ -80,6 +80,23 @@ func TestRestartRefusesOnUnownedRow(t *testing.T) {
 	}
 }
 
+func TestRestartRefusesOnContainerBackedPort(t *testing.T) {
+	services := []scan.Service{{Port: 5434, PID: 1, Process: "com.docker.backend", Owned: true, Container: "monkpayments-db-1", ContainerID: "abc123"}}
+	killer := &killtest.FakeKiller{}
+	app, _, stderr := newRestartTestApp(services, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{})
+
+	code := Execute(app, []string{"restart", "5434"})
+	if code != ExitKillFailed {
+		t.Fatalf("got exit code %d, want %d", code, ExitKillFailed)
+	}
+	if !strings.Contains(stderr.String(), "docker restart monkpayments-db-1") {
+		t.Fatalf("expected a docker-restart pointer in the refusal message, got %q", stderr.String())
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("must never attempt to kill a container-backed port's host PID, got %d Execute calls", len(killer.ExecuteCalls))
+	}
+}
+
 func TestRestartRefusesWhenEnvUnavailable(t *testing.T) {
 	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
 	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}

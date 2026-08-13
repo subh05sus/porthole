@@ -304,6 +304,13 @@ func (m Model) beginRestartConfirm() (tea.Model, tea.Cmd) {
 		m.status = "needs elevated permissions, try running as Administrator/root"
 		return m, nil
 	}
+	if target.ContainerID != "" {
+		// See internal/cli/restart.go's identical refusal: the captured
+		// cmdline belongs to the host-side forwarding process, not the
+		// containerized one, so respawning it would be meaningless.
+		m.status = "container-backed port — restart not supported, use `docker restart " + target.Container + "`"
+		return m, nil
+	}
 
 	t := *target
 	m.mode = modeConfirmRestart

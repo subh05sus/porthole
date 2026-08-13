@@ -27,6 +27,13 @@ type Target struct {
 	PID       int
 	StartTime uint64
 	Owned     bool
+
+	// ContainerID, when non-empty, means this Target is backed by a
+	// container's published port (see scan.Service.ContainerID) rather
+	// than a plain host process. Ladder itself ignores this field — it
+	// exists purely for internal/container's AwareKiller decorator to
+	// route to `docker stop` instead of the PID-based ladder.
+	ContainerID string
 }
 
 // Status describes the outcome of a ladder step.

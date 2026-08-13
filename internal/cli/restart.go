@@ -50,6 +50,15 @@ func runRestart(app *App, portArg string) error {
 	if !target.Owned {
 		return exitErr(ExitPermissionDenied, fmt.Errorf("port :%d: needs elevated permissions, try: sudo porthole", port))
 	}
+	if target.ContainerID != "" {
+		// The captured cmdline/cwd/env belong to the host-side forwarding
+		// process (com.docker.backend/docker-proxy), not the containerized
+		// process — respawning that would be meaningless at best and
+		// disruptive at worst. Refuse honestly rather than guess; a
+		// container restart is `docker restart <container>`, a different
+		// operation porthole doesn't attempt here.
+		return exitErr(ExitKillFailed, fmt.Errorf("port :%d is published by container %q — restart isn't supported for container-backed ports, use `docker restart %s` instead", port, target.Container, target.Container))
+	}
 
 	// Capture the respawn plan *before* killing — once the process is
 	// dead, its cmdline/cwd/env are gone.

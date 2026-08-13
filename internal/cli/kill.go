@@ -132,7 +132,7 @@ func runKill(app *App, args []string, force, dryRun, yes, dev bool, project stri
 			}
 		}
 
-		target := kill.Target{PID: s.PID, StartTime: s.StartTime, Owned: s.Owned}
+		target := kill.Target{PID: s.PID, StartTime: s.StartTime, Owned: s.Owned, ContainerID: s.ContainerID}
 		res, killErr := app.Killer.Execute(ctx, target, kill.Options{Force: force, AutoEscalate: true})
 		code, msg := classifyKillResult(s, res, killErr)
 		if code == ExitSuccess {

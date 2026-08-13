@@ -199,7 +199,7 @@ type killResultMsg struct {
 
 func (m Model) killCmd(target scan.Service, force bool) tea.Cmd {
 	killer := m.killer
-	t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned}
+	t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned, ContainerID: target.ContainerID}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -210,7 +210,7 @@ func (m Model) killCmd(target scan.Service, force bool) tea.Cmd {
 
 func (m Model) escalateCmd(target scan.Service) tea.Cmd {
 	killer := m.killer
-	t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned}
+	t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned, ContainerID: target.ContainerID}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -239,7 +239,7 @@ func (m Model) restartCmd(target scan.Service) tea.Cmd {
 			return restartResultMsg{target: target, err: err}
 		}
 
-		t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned}
+		t := kill.Target{PID: target.PID, StartTime: target.StartTime, Owned: target.Owned, ContainerID: target.ContainerID}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		res, err := killer.Execute(ctx, t, kill.Options{AutoEscalate: true})
@@ -291,7 +291,7 @@ func (m Model) bulkKillCmd(targets []scan.Service, force bool) tea.Cmd {
 	return func() tea.Msg {
 		results := make([]bulkKillResult, 0, len(targets))
 		for _, t := range targets {
-			target := kill.Target{PID: t.PID, StartTime: t.StartTime, Owned: t.Owned}
+			target := kill.Target{PID: t.PID, StartTime: t.StartTime, Owned: t.Owned, ContainerID: t.ContainerID}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			res, err := killer.Execute(ctx, target, kill.Options{Force: force, AutoEscalate: true})
 			cancel()
