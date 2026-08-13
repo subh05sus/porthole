@@ -27,7 +27,19 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	b.WriteString(m.th.Header.Render(m.status))
+	header := m.status
+	if m.watching {
+		// PRD §5.3: "a subtle dot in the header pulses each refresh cycle
+		// so you know it is live." Toggled once per watch Event received
+		// (handleWatchEvent), not on every 60ms tick — a pulse per scan
+		// cycle, not a fast blink.
+		dot := "○"
+		if m.watchPulseOn {
+			dot = "●"
+		}
+		header = dot + " " + header
+	}
+	b.WriteString(m.th.Header.Render(header))
 	b.WriteString("\n\n")
 	// PRD §5.2's mockup embeds the status text in the border's top edge;
 	// lipgloss has no built-in "titled border" slot, so the status line is
@@ -56,7 +68,8 @@ func (m Model) renderTable() string {
 		b.WriteString(m.th.Danger.Render("  scan error: " + m.scanErr.Error()))
 		return b.String()
 	}
-	if len(m.filtered) == 0 {
+	fadingExtra := m.orphanedFadingRows()
+	if len(m.filtered) == 0 && len(fadingExtra) == 0 {
 		b.WriteString(m.th.Muted.Render("  no services listening"))
 		return b.String()
 	}
@@ -78,7 +91,35 @@ func (m Model) renderTable() string {
 		b.WriteString(m.renderRow(s, i == m.cursor))
 		rendered++
 	}
+	// Watch-mode removals disappear from m.filtered the instant a fresh
+	// scan lands (unlike a user-initiated kill, which deliberately delays
+	// its rescan — see handleKillResult), so a still-dissolving removed
+	// row has to be appended here rather than found in the normal loop.
+	for _, s := range fadingExtra {
+		if rendered > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.renderRow(s, false))
+		rendered++
+	}
 	return b.String()
+}
+
+// orphanedFadingRows returns fadingOut rows no longer present in
+// m.filtered — i.e. ones that must be rendered as extra rows rather than
+// found during the normal m.filtered loop.
+func (m Model) orphanedFadingRows() []scan.Service {
+	present := make(map[rowKey]bool, len(m.filtered))
+	for _, s := range m.filtered {
+		present[keyOf(s)] = true
+	}
+	var out []scan.Service
+	for _, f := range m.fadingOut {
+		if !present[keyOf(f.service)] {
+			out = append(out, f.service)
+		}
+	}
+	return out
 }
 
 func (m Model) renderRow(s scan.Service, selected bool) string {
@@ -108,12 +149,20 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 		output.FormatUptime(s.Uptime), colUptime,
 	)
 
-	if m.isDying(s) {
-		stage := anim.FadeOutStage(m.clock().Sub(m.dyingStart), killDissolveDuration)
-		if stage < anim.FadeStages/2 {
-			return m.th.Success.Render(row)
+	if f, ok := m.findFading(s); ok {
+		// PRD §5.2: a user-initiated kill shows "terminated" in green
+		// before dissolving. A watch-mode removal (the process just exited
+		// on its own) has nothing to celebrate, so it just dims throughout.
+		if f.triggersRescan {
+			stage := anim.FadeOutStage(m.clock().Sub(f.startedAt), killDissolveDuration)
+			if stage < anim.FadeStages/2 {
+				return m.th.Success.Render(row)
+			}
 		}
 		return m.th.Muted.Render(row)
+	}
+	if _, ok := m.recentlyAdded[keyOf(s)]; ok {
+		return m.th.Success.Render(row)
 	}
 
 	switch {
@@ -126,8 +175,14 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 	}
 }
 
-func (m Model) isDying(s scan.Service) bool {
-	return m.dying != nil && m.dying.PID == s.PID && m.dying.Port == s.Port
+func (m Model) findFading(s scan.Service) (fadeEntry, bool) {
+	key := keyOf(s)
+	for _, f := range m.fadingOut {
+		if keyOf(f.service) == key {
+			return f, true
+		}
+	}
+	return fadeEntry{}, false
 }
 
 // padColumns takes alternating (value, width) pairs and left-pads each
@@ -157,6 +212,6 @@ func (m Model) hintBar() string {
 	case modeKilling:
 		return "working…"
 	default:
-		return "↑↓ nav · k kill · K force · / filter · r refresh · ? help · q quit"
+		return "↑↓ nav · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
 	}
 }

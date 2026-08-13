@@ -369,8 +369,8 @@ func TestDyingRowPersistsUntilFadeCompletesThenRescans(t *testing.T) {
 	m = m2.(Model)
 	m = runCmd(t, m, cmd) // applies killResultMsg
 
-	if m.dying == nil {
-		t.Fatalf("expected a dying row to be set after a successful kill")
+	if len(m.fadingOut) != 1 {
+		t.Fatalf("expected one fading row to be set after a successful kill, got %d", len(m.fadingOut))
 	}
 
 	// Still within the dissolve window: the row must still be there. When
@@ -381,7 +381,7 @@ func TestDyingRowPersistsUntilFadeCompletesThenRescans(t *testing.T) {
 	fc.Advance(killDissolveDuration / 2)
 	m2, cmd = m.Update(tickMsg(fc.Now()))
 	m = m2.(Model)
-	if m.dying == nil {
+	if len(m.fadingOut) != 1 {
 		t.Fatalf("row must still be dying mid-dissolve")
 	}
 	if _, isBatch := cmd().(tea.BatchMsg); isBatch {
@@ -393,10 +393,111 @@ func TestDyingRowPersistsUntilFadeCompletesThenRescans(t *testing.T) {
 	fc.Advance(killDissolveDuration)
 	m2, cmd = m.Update(tickMsg(fc.Now()))
 	m = m2.(Model)
-	if m.dying != nil {
-		t.Fatalf("expected dying to clear once the dissolve completes")
+	if len(m.fadingOut) != 0 {
+		t.Fatalf("expected fadingOut to clear once the dissolve completes")
 	}
 	if _, isBatch := cmd().(tea.BatchMsg); !isBatch {
 		t.Fatalf("expected a rescan command batched with the tick once the dissolve completes")
+	}
+}
+
+func TestToggleWatchOnStartsWatchingAndReceivesFirstEvent(t *testing.T) {
+	m := newTestModel([]scan.Service{{Port: 3000, PID: 1, Process: "node"}}, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, cmd := m.Update(key("w"))
+	m = m2.(Model)
+	if !m.watching {
+		t.Fatalf("expected watching=true after toggling on")
+	}
+	if m.watchCancel == nil {
+		t.Fatalf("expected watchCancel to be set")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a command to wait for the first watch event")
+	}
+
+	m = runCmd(t, m, cmd)
+	if !m.watchPulseOn {
+		t.Fatalf("expected the pulse to toggle on after the first watch event")
+	}
+	if len(m.services) != 1 || m.services[0].Port != 3000 {
+		t.Fatalf("expected the watch event's services to populate the model, got %+v", m.services)
+	}
+}
+
+func TestToggleWatchOffClearsState(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("w"))
+	m = m2.(Model)
+	if !m.watching {
+		t.Fatalf("precondition failed: expected watching=true")
+	}
+
+	m2, _ = m.Update(key("w"))
+	m = m2.(Model)
+	if m.watching {
+		t.Fatalf("expected watching=false after toggling off")
+	}
+	if m.watchCancel != nil || m.watchEvents != nil {
+		t.Fatalf("expected watch state cleared after toggling off")
+	}
+}
+
+func TestWatchEventHighlightsAddedAndFadesRemoved(t *testing.T) {
+	m := newTestModel([]scan.Service{{Port: 3000, PID: 1}}, nil)
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+	m = runCmd(t, m, m.Init())
+
+	ev := scan.Event{
+		Services: []scan.Service{{Port: 3000, PID: 1}, {Port: 8080, PID: 2}},
+		Diff: scan.Diff{
+			Added:   []scan.Service{{Port: 8080, PID: 2}},
+			Removed: []scan.Service{{Port: 9999, PID: 3}},
+		},
+	}
+	m2, _ := m.Update(watchEventMsg{event: ev, ok: true})
+	m = m2.(Model)
+
+	if _, ok := m.recentlyAdded[rowKey{port: 8080, pid: 2}]; !ok {
+		t.Fatalf("expected the added service to be tracked for highlighting, got %+v", m.recentlyAdded)
+	}
+	if len(m.fadingOut) != 1 || m.fadingOut[0].service.Port != 9999 {
+		t.Fatalf("expected the removed service to be tracked as fading, got %+v", m.fadingOut)
+	}
+	if m.fadingOut[0].triggersRescan {
+		t.Fatalf("a watch-mode removal must not trigger an extra rescan on top of watch's own cadence")
+	}
+}
+
+func TestWatchEventClosedChannelStopsWatching(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m2, _ := m.Update(key("w"))
+	m = m2.(Model)
+
+	m2, cmd := m.Update(watchEventMsg{ok: false})
+	m = m2.(Model)
+	if m.watching {
+		t.Fatalf("expected watching=false once the event channel closes")
+	}
+	if cmd != nil {
+		t.Fatalf("expected no further wait command once the channel is closed")
+	}
+}
+
+func TestQuitWhileWatchingDoesNotPanic(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m2, _ := m.Update(key("w"))
+	m = m2.(Model)
+
+	m2, cmd := m.Update(key("q"))
+	m = m2.(Model)
+	if !m.quitting || cmd == nil {
+		t.Fatalf("expected quitting=true and a tea.Quit command")
 	}
 }

@@ -10,6 +10,7 @@ var helpEntries = []struct {
 	{"k", "kill selected (SIGTERM, then prompt to escalate)"},
 	{"K", "force kill (SIGKILL, still confirms)"},
 	{"/", "fuzzy filter by port, process, or project"},
+	{"w", "toggle watch mode (live-updating list)"},
 	{"r", "manual refresh"},
 	{"?", "toggle this help"},
 	{"q / esc", "quit"},

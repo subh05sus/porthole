@@ -40,6 +40,28 @@ const (
 	modeHelp
 )
 
+// watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.
+const watchInterval = 2 * time.Second
+
+// rowKey identifies a row for highlight/fade tracking — a lighter-weight
+// local twin of scan's own unexported identity type.
+type rowKey struct {
+	port, pid int
+}
+
+func keyOf(s scan.Service) rowKey { return rowKey{port: s.Port, pid: s.PID} }
+
+// fadeEntry is a row still visible while dissolving — either a row the
+// user just killed, or one watch mode reported as removed. triggersRescan
+// is true only for kill-flow entries: watch mode already drives its own
+// scan cadence, so a watch-removal's fade completing must not also queue
+// an extra scan.
+type fadeEntry struct {
+	service        scan.Service
+	startedAt      time.Time
+	triggersRescan bool
+}
+
 // Model is porthole's Bubble Tea Model. Init/Update/View never call the
 // scanner or killer directly on this goroutine — every OS interaction is
 // dispatched as a tea.Cmd so the UI thread never blocks (PRD §8.3).
@@ -63,8 +85,13 @@ type Model struct {
 	force     bool          // whether the pending kill is the force (K) path
 	killStart time.Time     // when the in-flight kill/escalate began, for the spinner
 
-	dying      *scan.Service // just-killed row still dissolving
-	dyingStart time.Time
+	fadingOut     []fadeEntry          // rows dissolving (kill success and/or watch removals)
+	recentlyAdded map[rowKey]time.Time // rows briefly highlighted after appearing in watch mode
+
+	watching     bool
+	watchCancel  context.CancelFunc
+	watchEvents  <-chan scan.Event
+	watchPulseOn bool
 
 	status       string
 	statusExpiry time.Time // while non-zero and in the future, status overrides computeNormalStatus
@@ -171,6 +198,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case killResultMsg:
 		return m.handleKillResult(msg)
 
+	case watchEventMsg:
+		return m.handleWatchEvent(msg)
+
 	case tickMsg:
 		return m.handleTick()
 
@@ -180,14 +210,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// watchEventMsg wraps a scan.Event so the "listen on channel, requeue Cmd"
+// pattern below can distinguish it from other tea.Msg types.
+type watchEventMsg struct {
+	event scan.Event
+	ok    bool // false means the channel closed
+}
+
+// waitForWatchEvent reads exactly one event from m.watchEvents. Called
+// again after every event is processed (see handleWatchEvent), mirroring
+// the tick loop's self-rescheduling — never more than one of these is ever
+// in flight, so this doesn't violate the "no timers/goroutines stacking"
+// budget even though it's conceptually a separate stream from the 60ms tick.
+func (m Model) waitForWatchEvent() tea.Cmd {
+	ch := m.watchEvents
+	return func() tea.Msg {
+		ev, ok := <-ch
+		return watchEventMsg{event: ev, ok: ok}
+	}
+}
+
+func (m Model) handleWatchEvent(msg watchEventMsg) (tea.Model, tea.Cmd) {
+	if !msg.ok {
+		// The channel closed — e.g. someone else cancelled our context.
+		// Fall back to normal (non-watching) state rather than spin on a
+		// closed channel.
+		m.watching = false
+		return m, nil
+	}
+
+	m.watchPulseOn = !m.watchPulseOn
+
+	if msg.event.Err == nil {
+		m.services = msg.event.Services
+		m.revealStart = m.clock()
+		m.applyFilter()
+
+		now := m.clock()
+		if m.recentlyAdded == nil {
+			m.recentlyAdded = make(map[rowKey]time.Time)
+		}
+		for _, s := range msg.event.Diff.Added {
+			m.recentlyAdded[keyOf(s)] = now
+		}
+		for _, s := range msg.event.Diff.Removed {
+			m.fadingOut = append(m.fadingOut, fadeEntry{service: s, startedAt: now, triggersRescan: false})
+		}
+	}
+
+	return m, m.waitForWatchEvent()
+}
+
 func (m Model) handleTick() (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	if m.dying != nil {
-		elapsed := m.clock().Sub(m.dyingStart)
-		if anim.FadeOutComplete(elapsed, killDissolveDuration) {
-			m.dying = nil
+	if len(m.fadingOut) > 0 {
+		remaining := m.fadingOut[:0:0]
+		needsRescan := false
+		for _, f := range m.fadingOut {
+			if anim.FadeOutComplete(m.clock().Sub(f.startedAt), killDissolveDuration) {
+				if f.triggersRescan {
+					needsRescan = true
+				}
+				continue
+			}
+			remaining = append(remaining, f)
+		}
+		m.fadingOut = remaining
+		if needsRescan {
 			cmd = m.scanCmd()
+		}
+	}
+
+	for key, at := range m.recentlyAdded {
+		if m.clock().Sub(at) >= killDissolveDuration {
+			delete(m.recentlyAdded, key)
 		}
 	}
 
@@ -278,8 +375,7 @@ func (m Model) handleKillResult(msg killResultMsg) (tea.Model, tea.Cmd) {
 
 	case msg.result.Status == kill.StatusKilled || msg.result.Status == kill.StatusAlreadyDead:
 		m.mode = modeNormal
-		m.dying = &msg.target
-		m.dyingStart = m.clock()
+		m.fadingOut = append(m.fadingOut, fadeEntry{service: msg.target, startedAt: m.clock(), triggersRescan: true})
 		m.setEphemeralStatus(fmt.Sprintf("terminated %s on :%d", msg.target.Process, msg.target.Port), killDissolveDuration)
 		return m, nil
 

@@ -1,7 +1,11 @@
 package tui
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/subh05sus/porthole/internal/scan"
 )
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -35,8 +39,14 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// collide) navigate, and "k"/"K" are kill/force-kill only.
 	switch msg.String() {
 	case "q", "esc", "ctrl+c":
+		if m.watchCancel != nil {
+			m.watchCancel()
+		}
 		m.quitting = true
 		return m, tea.Quit
+
+	case "w":
+		return m.toggleWatch()
 
 	case "up":
 		if m.cursor > 0 {
@@ -171,4 +181,27 @@ func portString(port int) string {
 		return "-" + string(digits)
 	}
 	return string(digits)
+}
+
+// toggleWatch turns watch mode on or off. Turning it on starts
+// scan.Watch's own polling goroutine (independent of the TUI's 60ms
+// animation tick) and begins consuming its events via the standard
+// bubbletea "listen on channel, requeue Cmd" pattern; turning it off just
+// cancels that context, letting scan.Watch's own goroutine exit on its own.
+func (m Model) toggleWatch() (tea.Model, tea.Cmd) {
+	if m.watching {
+		if m.watchCancel != nil {
+			m.watchCancel()
+		}
+		m.watching = false
+		m.watchCancel = nil
+		m.watchEvents = nil
+		return m, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.watching = true
+	m.watchCancel = cancel
+	m.watchEvents = scan.Watch(ctx, m.lister, watchInterval, nil)
+	return m, m.waitForWatchEvent()
 }
