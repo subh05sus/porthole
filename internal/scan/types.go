@@ -1,7 +1,10 @@
 // Package scan discovers listening network sockets and the processes behind them.
 package scan
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Proto identifies the socket protocol/family a Service was discovered on.
 type Proto string
@@ -36,6 +39,11 @@ type Service struct {
 	// read of the same PID immediately before signaling it, to detect PID
 	// reuse between scan time and kill time.
 	StartTime uint64
+
+	// Uptime is how long the process has been running as of scan time,
+	// resolved from the OS's own wall-clock notion of process start (not
+	// derived from StartTime, which is deliberately opaque). Display only.
+	Uptime time.Duration
 
 	// Owned reports whether the current user has permission to signal this
 	// process. When false, ResolveErr explains why, and the kill path must
