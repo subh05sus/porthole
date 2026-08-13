@@ -36,11 +36,14 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 
 	var services []Service
 	tables := []struct {
-		path string
-		kind Proto
+		path       string
+		kind       Proto
+		listenOnly bool
 	}{
-		{"/proc/net/tcp", ProtoTCP},
-		{"/proc/net/tcp6", ProtoTCP6},
+		{"/proc/net/tcp", ProtoTCP, true},
+		{"/proc/net/tcp6", ProtoTCP6, true},
+		{"/proc/net/udp", ProtoUDP, false},
+		{"/proc/net/udp6", ProtoUDP6, false},
 	}
 	for _, table := range tables {
 		select {
@@ -57,7 +60,14 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 			return services, err
 		}
 
-		for _, e := range procfmt.FilterListening(entries) {
+		if table.listenOnly {
+			entries = procfmt.FilterListening(entries)
+		}
+		// UDP has no LISTEN state; every bound entry in /proc/net/udp[6] is
+		// a locally-bound socket worth reporting, per PRD's "relevant"
+		// redefinition for connectionless protocols.
+
+		for _, e := range entries {
 			svc := Service{
 				Port:  int(e.LocalPort),
 				Proto: table.kind,

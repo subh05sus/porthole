@@ -13,6 +13,7 @@ const (
 	ProtoTCP  Proto = "tcp"
 	ProtoTCP6 Proto = "tcp6"
 	ProtoUDP  Proto = "udp"
+	ProtoUDP6 Proto = "udp6"
 )
 
 // Service describes one listening socket and everything known about the

@@ -33,6 +33,7 @@ func NewDefaultLister() Lister {
 var (
 	modIPHelper             = windows.NewLazySystemDLL("iphlpapi.dll")
 	procGetExtendedTCPTable = modIPHelper.NewProc("GetExtendedTcpTable")
+	procGetExtendedUDPTable = modIPHelper.NewProc("GetExtendedUdpTable")
 )
 
 const (
@@ -40,7 +41,23 @@ const (
 	afINET6 = 23 // AF_INET6
 
 	tcpTableOwnerPIDListener = 3 // TCP_TABLE_OWNER_PID_LISTENER
+	udpTableOwnerPID         = 1 // UDP_TABLE_OWNER_PID
 )
+
+// mibUDPRowOwnerPID mirrors MIB_UDPROW_OWNER_PID.
+type mibUDPRowOwnerPID struct {
+	LocalAddr uint32
+	LocalPort uint32
+	OwningPid uint32
+}
+
+// mibUDP6RowOwnerPID mirrors MIB_UDP6ROW_OWNER_PID.
+type mibUDP6RowOwnerPID struct {
+	LocalAddr    [16]byte
+	LocalScopeID uint32
+	LocalPort    uint32
+	OwningPid    uint32
+}
 
 // mibTCPRowOwnerPID mirrors MIB_TCPROW_OWNER_PID.
 type mibTCPRowOwnerPID struct {
@@ -89,6 +106,28 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 		return services, err
 	}
 	services = append(services, v6...)
+
+	select {
+	case <-ctx.Done():
+		return services, ctx.Err()
+	default:
+	}
+	u4, err := listUDP4()
+	if err != nil {
+		return services, err
+	}
+	services = append(services, u4...)
+
+	select {
+	case <-ctx.Done():
+		return services, ctx.Err()
+	default:
+	}
+	u6, err := listUDP6()
+	if err != nil {
+		return services, err
+	}
+	services = append(services, u6...)
 
 	for i := range services {
 		owned, permErr := checkOwned(services[i].PID)
@@ -150,6 +189,77 @@ func listTCP6() ([]Service, error) {
 		})
 	}
 	return services, nil
+}
+
+// listUDP4 and listUDP6 mirror listTCP4/listTCP6. UDP has no LISTEN state —
+// every row GetExtendedUdpTable(UDP_TABLE_OWNER_PID) returns is already a
+// locally-bound socket, so unlike TCP there's no state field to check.
+func listUDP4() ([]Service, error) {
+	buf, numEntries, err := fetchUDPTable(afINET)
+	if err != nil {
+		return nil, err
+	}
+
+	rowSize := unsafe.Sizeof(mibUDPRowOwnerPID{})
+	services := make([]Service, 0, numEntries)
+	for i := uint32(0); i < numEntries; i++ {
+		row := (*mibUDPRowOwnerPID)(unsafe.Pointer(&buf[4+uintptr(i)*rowSize]))
+		services = append(services, Service{
+			Port:  int(swapPort(row.LocalPort)),
+			Proto: ProtoUDP,
+			Addr:  ipv4FromUint32(row.LocalAddr).String(),
+			PID:   int(row.OwningPid),
+		})
+	}
+	return services, nil
+}
+
+func listUDP6() ([]Service, error) {
+	buf, numEntries, err := fetchUDPTable(afINET6)
+	if err != nil {
+		return nil, err
+	}
+
+	rowSize := unsafe.Sizeof(mibUDP6RowOwnerPID{})
+	services := make([]Service, 0, numEntries)
+	for i := uint32(0); i < numEntries; i++ {
+		row := (*mibUDP6RowOwnerPID)(unsafe.Pointer(&buf[4+uintptr(i)*rowSize]))
+		services = append(services, Service{
+			Port:  int(swapPort(row.LocalPort)),
+			Proto: ProtoUDP6,
+			Addr:  net.IP(row.LocalAddr[:]).String(),
+			PID:   int(row.OwningPid),
+		})
+	}
+	return services, nil
+}
+
+// fetchUDPTable calls GetExtendedUdpTable twice: once to learn the required
+// buffer size, once to fill it. Returns the raw buffer (numEntries as its
+// first 4 bytes, per MIB_UDPTABLE_OWNER_PID/MIB_UDP6TABLE_OWNER_PID) and the
+// entry count.
+func fetchUDPTable(af uintptr) ([]byte, uint32, error) {
+	var size uint32
+	r, _, _ := procGetExtendedUDPTable.Call(
+		0, uintptr(unsafe.Pointer(&size)), 0, af, udpTableOwnerPID, 0,
+	)
+	if windows.Errno(r) != windows.ERROR_INSUFFICIENT_BUFFER {
+		return nil, 0, fmt.Errorf("scan: GetExtendedUdpTable sizing call failed: %w", windows.Errno(r))
+	}
+	if size < 4 {
+		size = 4
+	}
+
+	buf := make([]byte, size)
+	r, _, _ = procGetExtendedUDPTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0, af, udpTableOwnerPID, 0,
+	)
+	if r != 0 {
+		return nil, 0, fmt.Errorf("scan: GetExtendedUdpTable failed: %w", windows.Errno(r))
+	}
+
+	numEntries := binary.LittleEndian.Uint32(buf[:4])
+	return buf, numEntries, nil
 }
 
 // fetchTCPTable calls GetExtendedTcpTable twice: once to learn the required
