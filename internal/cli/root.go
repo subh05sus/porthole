@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/subh05sus/porthole/internal/kill"
+	"github.com/subh05sus/porthole/internal/proc"
+	"github.com/subh05sus/porthole/internal/restart"
 	"github.com/subh05sus/porthole/internal/scan"
 )
 
@@ -40,11 +42,13 @@ func exitErr(code int, err error) *ExitError { return &ExitError{Code: code, Err
 
 // App holds every dependency a subcommand needs.
 type App struct {
-	Lister scan.Lister
-	Killer kill.Killer
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Lister  scan.Lister
+	Killer  kill.Killer
+	Lookup  proc.Lookup     // used by restart to capture cmdline/cwd/env
+	Spawner restart.Spawner // used by restart to respawn
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 // NewRootCmd builds the porthole command tree against app's dependencies.
@@ -63,6 +67,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newListCmd(app))
 	root.AddCommand(newKillCmd(app))
 	root.AddCommand(newWatchCmd(app))
+	root.AddCommand(newRestartCmd(app))
 
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return runTUI(app)
