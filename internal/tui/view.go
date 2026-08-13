@@ -148,6 +148,8 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 		mark = "🛡 "
 	case !s.Owned:
 		mark = "🔒 "
+	case s.ContainerID != "":
+		mark = "🐳 "
 	}
 
 	process := s.Process

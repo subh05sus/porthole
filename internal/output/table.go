@@ -16,9 +16,9 @@ import (
 // is never dropped just because part of it couldn't be resolved.
 func Table(w io.Writer, services []scan.Service) error {
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PORT\tPID\tPROCESS\tPROJECT\tUPTIME")
+	fmt.Fprintln(tw, "PORT\tPID\tPROCESS\tPROJECT\tCONTAINER\tUPTIME")
 	for _, s := range services {
-		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", s.Port, s.PID, processCell(s), projectCell(s), FormatUptime(s.Uptime))
+		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\n", s.Port, s.PID, processCell(s), projectCell(s), containerCell(s), FormatUptime(s.Uptime))
 	}
 	return tw.Flush()
 }
@@ -39,6 +39,13 @@ func projectCell(s scan.Service) string {
 		return "-"
 	}
 	return s.Project
+}
+
+func containerCell(s scan.Service) string {
+	if s.Container == "" {
+		return "-"
+	}
+	return s.Container
 }
 
 // FormatUptime renders a duration the way the PRD's example table does:

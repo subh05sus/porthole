@@ -83,6 +83,22 @@ func TestListProjectFilter(t *testing.T) {
 	}
 }
 
+func TestListContainersFilter(t *testing.T) {
+	app, stdout, _ := newTestApp([]scan.Service{
+		{Port: 5434, Process: "com.docker.backend", Owned: true, Container: "db", ContainerID: "abc"},
+		{Port: 3000, Process: "node", Owned: true},
+	})
+
+	code := Execute(app, []string{"list", "--containers"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "3000") || !strings.Contains(out, "5434") {
+		t.Fatalf("--containers filter did not apply: %q", out)
+	}
+}
+
 func TestListPropagatesScanError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{

@@ -7,6 +7,7 @@ import (
 
 	"github.com/subh05sus/porthole/internal/cli"
 	"github.com/subh05sus/porthole/internal/config"
+	"github.com/subh05sus/porthole/internal/container"
 	"github.com/subh05sus/porthole/internal/history"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
@@ -29,10 +30,14 @@ func main() {
 	// (HistoryPath stays "") rather than blocking startup — it's a
 	// best-effort convenience feature, not a critical one.
 	historyPath, _ := history.DefaultPath()
-	killer := &history.LoggingKiller{Inner: kill.NewDefaultKiller(), Path: historyPath}
+	killer := &history.LoggingKiller{Inner: container.NewAwareKiller(kill.NewDefaultKiller()), Path: historyPath}
 
+	// Container awareness (published-port enrichment + docker-stop kill
+	// routing) is always wrapped on — AwareLister/AwareKiller degrade
+	// silently to plain behavior whenever no Docker-Engine-API-compatible
+	// daemon is reachable, so there's nothing to opt into.
 	app := &cli.App{
-		Lister:      scan.NewDefaultLister(),
+		Lister:      container.NewAwareLister(scan.NewDefaultLister()),
 		Killer:      killer,
 		Lookup:      proc.NewDefaultLookup(),
 		Spawner:     restart.NewDefaultSpawner(),

@@ -1032,3 +1032,17 @@ func TestProtectedRowRendersShieldGlyph(t *testing.T) {
 		t.Fatalf("expected the protected row to render a shield glyph, got:\n%s", view)
 	}
 }
+
+func TestContainerBackedRowRendersWhaleGlyph(t *testing.T) {
+	services := []scan.Service{{Port: 5434, PID: 1, Process: "com.docker.backend", Owned: true, Container: "db", ContainerID: "abc123"}}
+	m := newTestModel(services, nil)
+	m = runCmd(t, m, m.Init())
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+	fc.Advance(time.Second)
+
+	view := m.renderTable()
+	if !strings.Contains(view, "🐳") {
+		t.Fatalf("expected the container-backed row to render a whale glyph, got:\n%s", view)
+	}
+}

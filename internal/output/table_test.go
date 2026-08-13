@@ -78,6 +78,29 @@ func TestTableEmptyProjectRendersDash(t *testing.T) {
 	}
 }
 
+func TestTableShowsContainerNameOrDash(t *testing.T) {
+	services := []scan.Service{
+		{Port: 5434, PID: 22368, Process: "com.docker.backend", Owned: true, Container: "monkpayments-db-1"},
+		{Port: 3000, PID: 111, Process: "node", Owned: true},
+	}
+
+	var buf bytes.Buffer
+	if err := Table(&buf, services); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if !strings.Contains(lines[0], "CONTAINER") {
+		t.Fatalf("expected a CONTAINER header, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "monkpayments-db-1") {
+		t.Fatalf("expected the container name on the enriched row, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "node") {
+		t.Fatalf("sanity: expected node row, got %q", lines[2])
+	}
+}
+
 func TestFormatUptime(t *testing.T) {
 	cases := []struct {
 		d    time.Duration
