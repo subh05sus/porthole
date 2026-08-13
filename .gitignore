@@ -1,0 +1,16 @@
+# Planning / process docs — intentionally not versioned
+PRD.md
+Learnings.md
+TODO.md
+FUTURE_PLANS.md
+
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# OS cruft
+.DS_Store
+Thumbs.db
