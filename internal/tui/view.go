@@ -60,6 +60,10 @@ func (m Model) View() string {
 		b.WriteString(m.filterInput.View())
 		b.WriteString("\n")
 	}
+	if m.mode == modeConfirmProtected {
+		b.WriteString(m.confirmInput.View())
+		b.WriteString("\n")
+	}
 
 	b.WriteString(m.th.HintBar.Render(m.hintBar()))
 	return b.String()
@@ -135,10 +139,13 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 	if selected {
 		cursor = "▸ "
 	}
+	protected, _ := m.cfg.IsProtected(s.Port)
 	mark := "  "
 	switch {
 	case m.multiSelected[keyOf(s)]:
 		mark = "✓ "
+	case protected:
+		mark = "🛡 "
 	case !s.Owned:
 		mark = "🔒 "
 	}
@@ -220,6 +227,8 @@ func (m Model) hintBar() string {
 		return "enter apply · esc cancel"
 	case modeConfirmKill, modeConfirmEscalate, modeConfirmRestart:
 		return "y confirm · any other key cancel"
+	case modeConfirmProtected:
+		return "enter confirm · esc cancel"
 	case modeKilling, modeRestarting:
 		return "working…"
 	default:

@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/kill/killtest"
 	"github.com/subh05sus/porthole/internal/proc/proctest"
@@ -29,7 +30,7 @@ func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
 }
 
 // runCmd executes a tea.Cmd synchronously and feeds its resulting Msg back
@@ -105,7 +106,7 @@ func TestInitTriggersScanAndPopulatesServices(t *testing.T) {
 }
 
 func TestScanErrorSetsStatus(t *testing.T) {
-	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
+	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
 	m = runCmd(t, m, m.Init())
 
 	if m.scanErr == nil {
@@ -701,7 +702,7 @@ func TestSudoBannerForEmptyServicesIsEmpty(t *testing.T) {
 func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
 	killer := &killtest.FakeKiller{}
 	lister := &scantest.FakeLister{Services: []scan.Service{{Port: 1, ResolveErr: errFake}, {Port: 2, ResolveErr: errFake}}}
-	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, theme.New(true))
+	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
 	m = runCmd(t, m, m.Init())
 
 	if m.sudoBanner == "" {
@@ -729,7 +730,7 @@ func newRestartTestModel(services []scan.Service, killer *killtest.FakeKiller, l
 	if spawner == nil {
 		spawner = &restarttest.FakeSpawner{}
 	}
-	return New(lister, killer, lookup, spawner, theme.New(true))
+	return New(lister, killer, lookup, spawner, config.Config{}, theme.New(true))
 }
 
 func TestRestartConfirmFlowSuccess(t *testing.T) {
@@ -827,4 +828,136 @@ func TestRestartCaptureFailureShowsError(t *testing.T) {
 
 func procInfoWithArgv() proctest.Info {
 	return proctest.Info{Cmdline: "node server.js", Argv: []string{"node", "server.js"}, CWD: "/app"}
+}
+
+func newProtectedTestModel(services []scan.Service, killer *killtest.FakeKiller, cfg config.Config) Model {
+	lister := &scantest.FakeLister{Services: services}
+	if killer == nil {
+		killer = &killtest.FakeKiller{}
+	}
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, cfg, theme.New(true))
+}
+
+func typeString(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m2, _ := m.Update(key(string(r)))
+		m = m2.(Model)
+	}
+	return m
+}
+
+func TestKillProtectedPortRequiresTypedPortConfirmation(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	cfg := config.Config{Protected: []config.ProtectedPort{{Port: 5432, Reason: "prod db"}}}
+	m := newProtectedTestModel([]scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}, killer, cfg)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	if m.mode != modeConfirmProtected {
+		t.Fatalf("expected modeConfirmProtected, got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "prod db") {
+		t.Fatalf("expected status to mention the protection reason, got %q", m.status)
+	}
+
+	m = typeString(t, m, "5432")
+	m2, cmd := m.Update(key("enter"))
+	m = m2.(Model)
+	if m.mode != modeKilling {
+		t.Fatalf("expected modeKilling after correct typed confirmation, got %v", m.mode)
+	}
+	m = runCmd(t, m, cmd)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after the kill completes, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 1 {
+		t.Fatalf("expected Execute called once, got %d", len(killer.ExecuteCalls))
+	}
+}
+
+func TestKillProtectedPortWrongInputCancels(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	cfg := config.Config{Protected: []config.ProtectedPort{{Port: 5432}}}
+	m := newProtectedTestModel([]scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}, killer, cfg)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	m = typeString(t, m, "9999")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after a wrong typed confirmation, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("wrong confirmation must not call Execute, got %d calls", len(killer.ExecuteCalls))
+	}
+}
+
+func TestKillProtectedPortEscCancels(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	cfg := config.Config{Protected: []config.ProtectedPort{{Port: 5432}}}
+	m := newProtectedTestModel([]scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}, killer, cfg)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("esc"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after esc, got %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("esc must not call Execute, got %d calls", len(killer.ExecuteCalls))
+	}
+}
+
+func TestBulkKillRefusesWhenSelectionIncludesProtectedPort(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	cfg := config.Config{Protected: []config.ProtectedPort{{Port: 5432}}}
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Owned: true},
+		{Port: 5432, PID: 2, Process: "postgres", Owned: true},
+	}
+	m := newProtectedTestModel(services, killer, cfg)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("space"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("down"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("space"))
+	m = m2.(Model)
+
+	m2, _ = m.Update(key("k"))
+	m = m2.(Model)
+
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal (refused, not entering any confirm mode), got %v", m.mode)
+	}
+	if !strings.Contains(m.status, "individually") {
+		t.Fatalf("expected a message explaining protected ports need individual confirmation, got %q", m.status)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("must never kill anything from a refused bulk selection, got %d calls", len(killer.ExecuteCalls))
+	}
+}
+
+func TestProtectedRowRendersShieldGlyph(t *testing.T) {
+	cfg := config.Config{Protected: []config.ProtectedPort{{Port: 5432}}}
+	m := newProtectedTestModel([]scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}, nil, cfg)
+	m = runCmd(t, m, m.Init())
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+	fc.Advance(time.Second)
+
+	view := m.renderTable()
+	if !strings.Contains(view, "🛡") {
+		t.Fatalf("expected the protected row to render a shield glyph, got:\n%s", view)
+	}
 }

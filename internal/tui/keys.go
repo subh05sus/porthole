@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/subh05sus/porthole/internal/scan"
@@ -23,6 +25,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	case modeConfirmRestart:
 		return m.handleConfirmRestartKey(msg)
+	case modeConfirmProtected:
+		return m.handleConfirmProtectedKey(msg)
 	case modeKilling, modeRestarting:
 		// An operation is in flight; ignore input except quit rather than
 		// let it fall through to nav/kill handling and start a second one.
@@ -187,6 +191,24 @@ func (m Model) beginKillConfirm(force bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Protected ports need typed confirmation, which doesn't make sense to
+	// combine with a multi-target bulk kill — refuse and point the user at
+	// killing them individually rather than guessing what "type the port"
+	// would even mean across several different protected ports at once.
+	var protectedPorts []int
+	for _, t := range owned {
+		if protected, _ := m.cfg.IsProtected(t.Port); protected {
+			protectedPorts = append(protectedPorts, t.Port)
+		}
+	}
+	if len(protectedPorts) > 0 {
+		if len(owned) == 1 {
+			return m.beginProtectedConfirm(owned[0], force)
+		}
+		m.status = fmt.Sprintf("port(s) %v are protected — kill them individually, not as part of a bulk selection", protectedPorts)
+		return m, nil
+	}
+
 	m.mode = modeConfirmKill
 	m.pendingBulk = owned
 	m.force = force
@@ -208,6 +230,56 @@ func (m Model) beginKillConfirm(force bool) (tea.Model, tea.Cmd) {
 		m.status += " (y/n)"
 	}
 	return m, nil
+}
+
+// beginProtectedConfirm starts the typed-port confirmation flow (v1.3) for
+// a single protected-port kill.
+func (m Model) beginProtectedConfirm(target scan.Service, force bool) (tea.Model, tea.Cmd) {
+	_, reason := m.cfg.IsProtected(target.Port)
+
+	ti := textinput.New()
+	ti.Placeholder = fmt.Sprintf("type %d to confirm", target.Port)
+	ti.Focus()
+	m.confirmInput = ti
+
+	m.mode = modeConfirmProtected
+	m.pendingBulk = []scan.Service{target}
+	m.force = force
+
+	prompt := fmt.Sprintf("port :%d is protected", target.Port)
+	if reason != "" {
+		prompt += " (" + reason + ")"
+	}
+	m.status = prompt
+	return m, nil
+}
+
+func (m Model) handleConfirmProtectedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.pendingBulk = nil
+		m.setEphemeralStatus("kill cancelled", ephemeralStatusDuration)
+		return m, nil
+
+	case "enter":
+		target := m.pendingBulk[0]
+		m.pendingBulk = nil
+		if strings.TrimSpace(m.confirmInput.Value()) != portString(target.Port) {
+			m.mode = modeNormal
+			m.setEphemeralStatus("confirmation did not match, cancelled", ephemeralStatusDuration)
+			return m, nil
+		}
+		m.mode = modeKilling
+		m.killStart = m.clock()
+		m.killCount = 1
+		m.status = "sending kill signal…"
+		return m, m.killCmd(target, m.force)
+	}
+
+	var cmd tea.Cmd
+	m.confirmInput, cmd = m.confirmInput.Update(msg)
+	return m, cmd
 }
 
 // beginRestartConfirm starts the restart confirmation flow for the row

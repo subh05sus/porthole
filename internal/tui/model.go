@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/restart"
@@ -43,6 +44,7 @@ const (
 	modeDetail
 	modeConfirmRestart
 	modeRestarting
+	modeConfirmProtected
 )
 
 // watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.
@@ -75,6 +77,7 @@ type Model struct {
 	killer  kill.Killer
 	lookup  proc.Lookup
 	spawner restart.Spawner
+	cfg     config.Config
 	th      theme.Theme
 
 	// clock is injectable so animation timing is deterministic in tests
@@ -85,7 +88,8 @@ type Model struct {
 	filtered []scan.Service
 	cursor   int
 
-	filterInput textinput.Model
+	filterInput  textinput.Model
+	confirmInput textinput.Model // typed-port confirmation for protected ports
 
 	mode          mode
 	pending       *scan.Service   // single row awaiting the interactive escalate-after-ignored-SIGTERM prompt
@@ -131,7 +135,7 @@ type Model struct {
 
 // New builds a Model. Dependencies are injected so this whole package can
 // be tested without a real OS (see model_test.go).
-func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner restart.Spawner, th theme.Theme) Model {
+func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner restart.Spawner, cfg config.Config, th theme.Theme) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter by port, process, or project"
 	ti.Prompt = "/ "
@@ -142,6 +146,7 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 		killer:      killer,
 		lookup:      lookup,
 		spawner:     spawner,
+		cfg:         cfg,
 		th:          th,
 		clock:       clock,
 		filterInput: ti,

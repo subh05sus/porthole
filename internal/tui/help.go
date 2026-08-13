@@ -10,6 +10,7 @@ var helpEntries = []struct {
 	{"k", "kill selected (SIGTERM, then prompt to escalate)"},
 	{"K", "force kill (SIGKILL, still confirms)"},
 	{"R", "kill and respawn with the same command, cwd, and environment"},
+	{"🛡", "protected port (~/.porthole.yaml) — requires typing the port to confirm"},
 	{"space", "toggle multi-select for bulk kill"},
 	{"enter", "detail pane: full cmdline, cwd, user, socket list"},
 	{"/", "fuzzy filter by port, process, or project"},
