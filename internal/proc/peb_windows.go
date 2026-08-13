@@ -20,10 +20,19 @@ import (
 // failure returns an error rather than a best-guess value, so a bad offset
 // on some future Windows version degrades to an empty Cmdline/CWD (PRD
 // §7.3's own documented fallback) instead of surfacing garbage. Verified
-// empirically against a real spawned child process on this dev machine
-// (64-bit process reading a 64-bit target — cross-bitness/WOW64 targets
-// are out of scope, see TODO.md).
+// empirically against a real spawned child process on this dev machine —
+// both the native 64-bit-host-reading-64-bit-target path here, and the
+// WOW64 path (32-bit target on this 64-bit host) in peb_wow64_windows.go.
 func readProcessParameters(h windows.Handle) (cmdline, cwd string, err error) {
+	// A 32-bit target process on this 64-bit host has an entirely separate
+	// WOW64 PEB (a 32-bit structure, different offsets throughout) — the
+	// native PEB read below would silently return wrong/empty data for it
+	// rather than erroring, since the native PEB technically still exists
+	// for a WOW64 process but isn't populated with real process parameters.
+	if wow64, wowErr := isWow64Process(h); wowErr == nil && wow64 {
+		return readProcessParametersWow64(h)
+	}
+
 	peb, err := getPEBAddress(h)
 	if err != nil {
 		return "", "", err
