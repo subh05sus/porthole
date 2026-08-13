@@ -13,11 +13,20 @@ func writeFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+// newTestDetector returns a Detector backed by an isolated disk cache under
+// t.TempDir(), rather than NewDetector's real OS cache directory — plain
+// unit tests must never pollute the real ~/.cache/porthole file with
+// entries for temp dirs that stop existing the moment the test ends.
+func newTestDetector(t *testing.T) *Detector {
+	t.Helper()
+	return newDetectorWithCache(loadDiskCache(filepath.Join(t.TempDir(), "project-cache.json")))
+}
+
 func TestDetectPackageJSON(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "package.json", `{"name": "zapmail-web", "version": "1.0.0"}`)
 
-	if got := NewDetector().Detect(dir); got != "zapmail-web" {
+	if got := newTestDetector(t).Detect(dir); got != "zapmail-web" {
 		t.Fatalf("got %q, want zapmail-web", got)
 	}
 }
@@ -26,7 +35,7 @@ func TestDetectGoMod(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module github.com/subh05sus/porthole\n\ngo 1.23\n")
 
-	if got := NewDetector().Detect(dir); got != "porthole" {
+	if got := newTestDetector(t).Detect(dir); got != "porthole" {
 		t.Fatalf("got %q, want porthole", got)
 	}
 }
@@ -35,7 +44,7 @@ func TestDetectCargoToml(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "Cargo.toml", "[package]\nname = \"anvil-js\"\nversion = \"0.1.0\"\n")
 
-	if got := NewDetector().Detect(dir); got != "anvil-js" {
+	if got := newTestDetector(t).Detect(dir); got != "anvil-js" {
 		t.Fatalf("got %q, want anvil-js", got)
 	}
 }
@@ -44,7 +53,7 @@ func TestDetectPyprojectToml(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "pyproject.toml", "[project]\nname = \"slotli\"\nversion = \"0.1.0\"\n")
 
-	if got := NewDetector().Detect(dir); got != "slotli" {
+	if got := newTestDetector(t).Detect(dir); got != "slotli" {
 		t.Fatalf("got %q, want slotli", got)
 	}
 }
@@ -56,7 +65,7 @@ func TestDetectGitDirectoryUsesDirName(t *testing.T) {
 		t.Fatalf("failed to create fixture .git dir: %v", err)
 	}
 
-	if got := NewDetector().Detect(projectDir); got != "my-cool-app" {
+	if got := newTestDetector(t).Detect(projectDir); got != "my-cool-app" {
 		t.Fatalf("got %q, want my-cool-app", got)
 	}
 }
@@ -69,7 +78,7 @@ func TestDetectWalksUpToFindMarker(t *testing.T) {
 		t.Fatalf("failed to create nested dir: %v", err)
 	}
 
-	if got := NewDetector().Detect(nested); got != "rootproject" {
+	if got := newTestDetector(t).Detect(nested); got != "rootproject" {
 		t.Fatalf("got %q, want rootproject (found by walking up to the module root)", got)
 	}
 }
@@ -79,7 +88,7 @@ func TestDetectPackageJSONBeatsGoModWhenBothPresent(t *testing.T) {
 	writeFile(t, dir, "package.json", `{"name": "wins"}`)
 	writeFile(t, dir, "go.mod", "module example.com/loses\n")
 
-	if got := NewDetector().Detect(dir); got != "wins" {
+	if got := newTestDetector(t).Detect(dir); got != "wins" {
 		t.Fatalf("got %q, want package.json's name to take priority per PRD §7.3", got)
 	}
 }
@@ -91,20 +100,20 @@ func TestDetectFallsBackToDirNameWhenNoMarkerFound(t *testing.T) {
 		t.Fatalf("failed to create fixture dir: %v", err)
 	}
 
-	got := NewDetector().Detect(leaf)
+	got := newTestDetector(t).Detect(leaf)
 	if got != "some-random-folder" {
 		t.Fatalf("got %q, want the fallback to be the leaf directory's own name", got)
 	}
 }
 
 func TestDetectEmptyCWDIsSystem(t *testing.T) {
-	if got := NewDetector().Detect(""); got != "system" {
+	if got := newTestDetector(t).Detect(""); got != "system" {
 		t.Fatalf("got %q, want system", got)
 	}
 }
 
 func TestDetectUnreadableCWDIsSystem(t *testing.T) {
-	if got := NewDetector().Detect(filepath.Join(t.TempDir(), "does-not-exist")); got != "system" {
+	if got := newTestDetector(t).Detect(filepath.Join(t.TempDir(), "does-not-exist")); got != "system" {
 		t.Fatalf("got %q, want system", got)
 	}
 }
@@ -113,7 +122,7 @@ func TestDetectCachesPerCWDForSession(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "package.json", `{"name": "cached-name"}`)
 
-	d := NewDetector()
+	d := newTestDetector(t)
 	first := d.Detect(dir)
 	if first != "cached-name" {
 		t.Fatalf("got %q, want cached-name", first)

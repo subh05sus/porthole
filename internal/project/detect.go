@@ -10,18 +10,26 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Detector resolves project names, caching by cwd for the session (PRD
-// §7.3). Safe for concurrent use.
+// §7.3) and, additionally, persisting resolutions to disk across separate
+// porthole invocations (see cache.go) so a machine with many repos doesn't
+// re-walk the filesystem on every cold start. Safe for concurrent use.
 type Detector struct {
-	mu    sync.Mutex
-	cache map[string]string
+	mu       sync.Mutex
+	memCache map[string]string
+	disk     *diskCache
 }
 
-// NewDetector returns a Detector with an empty session cache.
+// NewDetector returns a Detector backed by the real on-disk cache location.
 func NewDetector() *Detector {
-	return &Detector{cache: make(map[string]string)}
+	return newDetectorWithCache(loadDiskCache(cacheFilePath()))
+}
+
+func newDetectorWithCache(disk *diskCache) *Detector {
+	return &Detector{memCache: make(map[string]string), disk: disk}
 }
 
 // Detect resolves cwd to a project name. Walking upward from cwd, the
@@ -36,25 +44,44 @@ func (d *Detector) Detect(cwd string) string {
 	}
 
 	d.mu.Lock()
-	if name, ok := d.cache[cwd]; ok {
+	if name, ok := d.memCache[cwd]; ok {
 		d.mu.Unlock()
 		return name
 	}
 	d.mu.Unlock()
 
-	name := detect(cwd)
+	if entry, ok := d.disk.get(cwd); ok && markerStillValid(entry) {
+		d.mu.Lock()
+		d.memCache[cwd] = entry.Name
+		d.mu.Unlock()
+		return entry.Name
+	}
+
+	name, markerPath := detect(cwd)
+
+	var modTime time.Time
+	if markerPath != "" {
+		if info, err := os.Stat(markerPath); err == nil {
+			modTime = info.ModTime()
+		}
+	}
 
 	d.mu.Lock()
-	d.cache[cwd] = name
+	d.memCache[cwd] = name
 	d.mu.Unlock()
+	d.disk.put(cwd, diskCacheEntry{Name: name, MarkerPath: markerPath, MarkerModTime: modTime})
+
 	return name
 }
 
-func detect(cwd string) string {
+// detect returns the resolved name and the marker file path that produced
+// it (empty if the fallback path was used, since there's nothing to
+// invalidate a fallback name against).
+func detect(cwd string) (name, markerPath string) {
 	dir := cwd
 	for {
-		if name, ok := tryMarkers(dir); ok {
-			return name
+		if name, markerPath, ok := tryMarkers(dir); ok {
+			return name, markerPath
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -62,26 +89,27 @@ func detect(cwd string) string {
 		}
 		dir = parent
 	}
-	return fallbackName(cwd)
+	return fallbackName(cwd), ""
 }
 
-func tryMarkers(dir string) (string, bool) {
+func tryMarkers(dir string) (name, markerPath string, ok bool) {
 	if name, ok := readPackageJSONName(filepath.Join(dir, "package.json")); ok {
-		return name, true
+		return name, filepath.Join(dir, "package.json"), true
 	}
 	if name, ok := readGoModName(filepath.Join(dir, "go.mod")); ok {
-		return name, true
+		return name, filepath.Join(dir, "go.mod"), true
 	}
 	if name, ok := readTOMLNameField(filepath.Join(dir, "Cargo.toml")); ok {
-		return name, true
+		return name, filepath.Join(dir, "Cargo.toml"), true
 	}
 	if name, ok := readTOMLNameField(filepath.Join(dir, "pyproject.toml")); ok {
-		return name, true
+		return name, filepath.Join(dir, "pyproject.toml"), true
 	}
 	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info != nil {
-		return filepath.Base(dir), true
+		gitPath := filepath.Join(dir, ".git")
+		return filepath.Base(dir), gitPath, true
 	}
-	return "", false
+	return "", "", false
 }
 
 // fallbackName is PRD §7.3's last resort: the enclosing directory's own
