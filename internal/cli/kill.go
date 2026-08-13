@@ -20,13 +20,14 @@ func newKillCmd(app *App) *cobra.Command {
 		dryRun  bool
 		yes     bool
 		project string
+		dev     bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "kill [ports...]",
 		Short: "Kill the process listening on one or more ports",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runKill(app, args, force, dryRun, yes, project)
+			return runKill(app, args, force, dryRun, yes, dev, project)
 		},
 	}
 
@@ -34,11 +35,18 @@ func newKillCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be killed, do nothing")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt")
 	cmd.Flags().StringVar(&project, "project", "", "kill everything owned by this project")
+	cmd.Flags().BoolVar(&dev, "dev", false, "kill everything you own in the common dev port range (3000-9999)")
 
 	return cmd
 }
 
-func runKill(app *App, args []string, force, dryRun, yes bool, project string) error {
+func runKill(app *App, args []string, force, dryRun, yes, dev bool, project string) error {
+	if dev {
+		if len(args) > 0 || project != "" {
+			return exitErr(ExitNotFound, errors.New("--dev cannot be combined with explicit ports or --project"))
+		}
+		args = []string{"3000-9999"}
+	}
 	if project != "" && len(args) > 0 {
 		return exitErr(ExitNotFound, errors.New("specify either ports or --project, not both"))
 	}
@@ -56,8 +64,30 @@ func runKill(app *App, args []string, force, dryRun, yes bool, project string) e
 	if err != nil {
 		return exitErr(ExitNotFound, err)
 	}
-	for _, p := range notFound {
-		fmt.Fprintf(app.Stderr, "nothing found on port %d\n", p)
+
+	if dev {
+		// --dev is a broad best-effort sweep, not a precise target list:
+		// most of a 3000-9999 scan will be empty ports, and most of what's
+		// listening won't be owned by the current user (system services).
+		// Reporting "nothing found on port 4523" ~6000 times and demanding
+		// elevated-permission errors for every locked row would drown out
+		// anything useful, so both are silently dropped here instead.
+		notFound = nil
+		owned := targets[:0]
+		for _, t := range targets {
+			if t.Owned {
+				owned = append(owned, t)
+			}
+		}
+		targets = owned
+		if len(targets) == 0 {
+			fmt.Fprintln(app.Stdout, "nothing owned to kill in 3000-9999")
+			return nil
+		}
+	} else {
+		for _, p := range notFound {
+			fmt.Fprintf(app.Stderr, "nothing found on port %d\n", p)
+		}
 	}
 	if len(targets) == 0 {
 		return exitErr(ExitNotFound, errors.New("nothing found to kill"))

@@ -293,3 +293,52 @@ func TestKillProtectedPortYesFlagDoesNotBypassConfirmation(t *testing.T) {
 		t.Fatalf("--yes must not bypass protected-port confirmation, got %d Execute calls", len(killer.ExecuteCalls))
 	}
 }
+
+func TestKillDevSweepsOwnedPortsInRangeOnly(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{
+		{Port: 3000, PID: 1, Process: "node", Owned: true},
+		{Port: 5432, PID: 2, Process: "postgres", Owned: false}, // locked, must be silently dropped
+		{Port: 8080, PID: 3, Process: "go", Owned: true},
+		{Port: 80, PID: 4, Process: "nginx", Owned: true}, // outside 3000-9999, must be ignored
+	}
+	app, stdout, stderr := newKillTestApp(services, killer, "")
+
+	code := Execute(app, []string{"kill", "--dev", "--yes"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0: stderr=%q", code, stderr.String())
+	}
+	if len(killer.ExecuteCalls) != 2 {
+		t.Fatalf("expected exactly the 2 owned in-range ports killed, got %d calls: %+v", len(killer.ExecuteCalls), killer.ExecuteCalls)
+	}
+	if strings.Contains(stderr.String(), "nothing found") {
+		t.Fatalf("--dev must not spam 'nothing found' for the thousands of empty ports in range, got %q", stderr.String())
+	}
+	_ = stdout
+}
+
+func TestKillDevWithNoOwnedPortsReportsCleanly(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	services := []scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: false}}
+	app, stdout, _ := newKillTestApp(services, killer, "")
+
+	code := Execute(app, []string{"kill", "--dev", "--yes"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "nothing owned") {
+		t.Fatalf("got %q", stdout.String())
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("expected no Execute calls, got %d", len(killer.ExecuteCalls))
+	}
+}
+
+func TestKillDevCannotCombineWithExplicitPorts(t *testing.T) {
+	app, _, _ := newKillTestApp(nil, &killtest.FakeKiller{}, "")
+
+	code := Execute(app, []string{"kill", "--dev", "3000"})
+	if code != ExitNotFound {
+		t.Fatalf("got exit code %d, want %d", code, ExitNotFound)
+	}
+}
