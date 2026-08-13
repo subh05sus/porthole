@@ -43,7 +43,12 @@ func (m Model) View() string {
 		header = dot + " " + header
 	}
 	b.WriteString(m.th.Header.Render(header))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	if m.sudoBanner != "" {
+		b.WriteString(m.th.Danger.Render(m.sudoBanner))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 	// PRD §5.2's mockup embeds the status text in the border's top edge;
 	// lipgloss has no built-in "titled border" slot, so the status line is
 	// rendered above the box instead — a cosmetic, not functional,

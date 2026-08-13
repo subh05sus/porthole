@@ -109,6 +109,13 @@ type Model struct {
 	scanStart    time.Time
 	revealStart  time.Time
 
+	// firstScanDone/sudoBanner implement PRD §8.2's startup check: if more
+	// than half of the sockets found on the very first scan are
+	// unresolvable, show a one-line banner suggesting elevated
+	// permissions. Computed once, not re-evaluated on every refresh.
+	firstScanDone bool
+	sudoBanner    string
+
 	width, height int
 	quitting      bool
 }
@@ -232,6 +239,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.services = msg.services
 		m.revealStart = m.clock()
 		m.applyFilter()
+		if !m.firstScanDone {
+			m.firstScanDone = true
+			m.sudoBanner = sudoBannerFor(msg.services)
+		}
 		return m, nil
 
 	case killResultMsg:
@@ -407,6 +418,26 @@ func filterServices(services []scan.Service, query string) []scan.Service {
 		}
 	}
 	return out
+}
+
+// sudoBannerFor implements PRD §8.2: "if more than half of discovered
+// sockets are unresolvable, show a one-line banner suggesting sudo."
+// Returns "" when the check doesn't trigger (including the len==0 case, so
+// an empty scan never falsely divides by zero into "100% unresolvable").
+func sudoBannerFor(services []scan.Service) string {
+	if len(services) == 0 {
+		return ""
+	}
+	unresolved := 0
+	for _, s := range services {
+		if s.ResolveErr != nil {
+			unresolved++
+		}
+	}
+	if unresolved*2 <= len(services) {
+		return ""
+	}
+	return fmt.Sprintf("%d of %d services need elevated permissions to inspect — try running as Administrator/root", unresolved, len(services))
 }
 
 func (m Model) handleKillResult(msg killResultMsg) (tea.Model, tea.Cmd) {

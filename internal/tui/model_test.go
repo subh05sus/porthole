@@ -663,3 +663,55 @@ func TestAnyKeyClosesDetailPane(t *testing.T) {
 		t.Fatalf("expected detailTarget cleared after closing, got %+v", m.detailTarget)
 	}
 }
+
+func TestSudoBannerForMajorityUnresolved(t *testing.T) {
+	services := []scan.Service{
+		{Port: 1, ResolveErr: errFake},
+		{Port: 2, ResolveErr: errFake},
+		{Port: 3},
+	}
+	got := sudoBannerFor(services)
+	if got == "" {
+		t.Fatalf("expected a banner when 2 of 3 services are unresolvable")
+	}
+	if !strings.Contains(got, "2 of 3") {
+		t.Fatalf("got %q, want it to mention 2 of 3", got)
+	}
+}
+
+func TestSudoBannerForMinorityUnresolvedIsEmpty(t *testing.T) {
+	services := []scan.Service{
+		{Port: 1, ResolveErr: errFake},
+		{Port: 2},
+		{Port: 3},
+	}
+	if got := sudoBannerFor(services); got != "" {
+		t.Fatalf("got %q, want empty banner when unresolved is a minority", got)
+	}
+}
+
+func TestSudoBannerForEmptyServicesIsEmpty(t *testing.T) {
+	if got := sudoBannerFor(nil); got != "" {
+		t.Fatalf("got %q, want empty banner for zero services (must not divide by zero into 100%%)", got)
+	}
+}
+
+func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
+	killer := &killtest.FakeKiller{}
+	lister := &scantest.FakeLister{Services: []scan.Service{{Port: 1, ResolveErr: errFake}, {Port: 2, ResolveErr: errFake}}}
+	m := New(lister, killer, theme.New(true))
+	m = runCmd(t, m, m.Init())
+
+	if m.sudoBanner == "" {
+		t.Fatalf("expected a banner after the first scan found majority-unresolved services")
+	}
+
+	// A later scan resolving everything must not retroactively clear the
+	// banner — it's a one-time startup check per PRD §8.2, not a live gauge.
+	lister.Services = []scan.Service{{Port: 1}, {Port: 2}}
+	m2, _ := m.Update(scanCompleteMsg{services: lister.Services})
+	m = m2.(Model)
+	if m.sudoBanner == "" {
+		t.Fatalf("expected the startup banner to persist across later scans")
+	}
+}
