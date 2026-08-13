@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -11,6 +13,14 @@ import (
 	"github.com/subh05sus/porthole/internal/scan/scantest"
 	"github.com/subh05sus/porthole/internal/tui/theme"
 )
+
+// fakeClock gives tests deterministic control over the elapsed time every
+// animation calculation in the model reads through m.clock, instead of
+// racing real wall-clock time.
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time          { return c.now }
+func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 	lister := &scantest.FakeLister{Services: services}
@@ -22,13 +32,28 @@ func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 
 // runCmd executes a tea.Cmd synchronously and feeds its resulting Msg back
 // into Update, the same pattern bubbletea's runtime uses — but driven
-// directly, with no real terminal, per the plan's testing strategy.
+// directly, with no real terminal, per the plan's testing strategy. A
+// tea.Batch (used by Init to run the scan and the tick loop together) is
+// unpacked one level deep and each sub-command applied in turn; any *new*
+// command a sub-update produces (e.g. tickCmd rescheduling itself) is
+// deliberately left unrun, or every test using Init() would recurse into
+// the tick loop forever.
 func runCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
 	t.Helper()
 	if cmd == nil {
 		return m
 	}
 	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			newModel, _ := m.Update(c())
+			m = newModel.(Model)
+		}
+		return m
+	}
 	newModel, _ := m.Update(msg)
 	return newModel.(Model)
 }
@@ -50,14 +75,28 @@ func key(s string) tea.KeyMsg {
 
 func TestInitTriggersScanAndPopulatesServices(t *testing.T) {
 	m := newTestModel([]scan.Service{{Port: 3000, Process: "node", Owned: true}}, nil)
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
 
 	m = runCmd(t, m, m.Init())
 
 	if len(m.services) != 1 || m.services[0].Port != 3000 {
 		t.Fatalf("got services %+v", m.services)
 	}
+	// Immediately after the scan, still within the "resolving" phase of the
+	// progressive status line (PRD §5.3) — the frozen fake clock hasn't
+	// crossed anim.RevealCap yet.
+	if !strings.Contains(m.status, "resolving") {
+		t.Fatalf("got status %q, want a resolving-phase message", m.status)
+	}
+
+	// Advance well past the reveal cap and re-tick: status must settle to
+	// the final steady-state message.
+	fc.Advance(time.Second)
+	m2, _ := m.Update(tickMsg(fc.Now()))
+	m = m2.(Model)
 	if m.status != "1 services listening" {
-		t.Fatalf("got status %q", m.status)
+		t.Fatalf("got status %q, want final steady-state message", m.status)
 	}
 }
 
@@ -291,3 +330,73 @@ var errFake = fakeErr("boom")
 type fakeErr string
 
 func (e fakeErr) Error() string { return string(e) }
+
+func TestStreamingRevealShowsFewerRowsBeforeStaggerElapses(t *testing.T) {
+	m := newTestModel([]scan.Service{{Port: 1}, {Port: 2}, {Port: 3}}, nil)
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+
+	m = runCmd(t, m, m.Init())
+
+	// Frozen at revealStart: only row 0 should be due (header + 1 row).
+	view := m.renderTable()
+	if strings.Count(view, "\n") != 1 {
+		t.Fatalf("expected exactly one data row rendered immediately after scan, got view:\n%s", view)
+	}
+
+	// Advance past the full reveal cascade; all three rows must now render.
+	fc.Advance(500 * time.Millisecond)
+	view = m.renderTable()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 4 { // header + 3 rows
+		t.Fatalf("expected header + 3 rows once reveal completes, got %d lines:\n%s", len(lines), view)
+	}
+}
+
+func TestDyingRowPersistsUntilFadeCompletesThenRescans(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 3000, PID: 111, Process: "node", Owned: true}}
+	m := newTestModel(services, killer)
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+
+	m = runCmd(t, m, m.Init())
+	fc.Advance(time.Second) // past the reveal cascade so all rows show
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	m2, cmd := m.Update(key("y"))
+	m = m2.(Model)
+	m = runCmd(t, m, cmd) // applies killResultMsg
+
+	if m.dying == nil {
+		t.Fatalf("expected a dying row to be set after a successful kill")
+	}
+
+	// Still within the dissolve window: the row must still be there. When
+	// handleTick's rescan cmd is nil, tea.Batch(nil, tickCmd) collapses to
+	// tickCmd directly (see bubbletea's compactCmds), so the returned Cmd
+	// yields a bare tickMsg rather than a BatchMsg — that's how "no rescan
+	// happened" is distinguished here.
+	fc.Advance(killDissolveDuration / 2)
+	m2, cmd = m.Update(tickMsg(fc.Now()))
+	m = m2.(Model)
+	if m.dying == nil {
+		t.Fatalf("row must still be dying mid-dissolve")
+	}
+	if _, isBatch := cmd().(tea.BatchMsg); isBatch {
+		t.Fatalf("must not rescan before the dissolve finishes")
+	}
+
+	// Past the dissolve window: it must clear and trigger a rescan, which
+	// shows up as a BatchMsg{rescanCmd, tickCmd} instead of a bare tickMsg.
+	fc.Advance(killDissolveDuration)
+	m2, cmd = m.Update(tickMsg(fc.Now()))
+	m = m2.(Model)
+	if m.dying != nil {
+		t.Fatalf("expected dying to clear once the dissolve completes")
+	}
+	if _, isBatch := cmd().(tea.BatchMsg); !isBatch {
+		t.Fatalf("expected a rescan command batched with the tick once the dissolve completes")
+	}
+}

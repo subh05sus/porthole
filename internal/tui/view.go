@@ -6,6 +6,7 @@ import (
 
 	"github.com/subh05sus/porthole/internal/output"
 	"github.com/subh05sus/porthole/internal/scan"
+	"github.com/subh05sus/porthole/internal/tui/anim"
 )
 
 const (
@@ -28,7 +29,11 @@ func (m Model) View() string {
 
 	b.WriteString(m.th.Header.Render(m.status))
 	b.WriteString("\n\n")
-	b.WriteString(m.renderTable())
+	// PRD §5.2's mockup embeds the status text in the border's top edge;
+	// lipgloss has no built-in "titled border" slot, so the status line is
+	// rendered above the box instead — a cosmetic, not functional,
+	// deviation from the literal ASCII mockup.
+	b.WriteString(m.th.Border.Padding(0, 1).Render(m.renderTable()))
 	b.WriteString("\n")
 
 	if m.mode == modeFilter {
@@ -56,11 +61,22 @@ func (m Model) renderTable() string {
 		return b.String()
 	}
 
+	revealElapsed := m.clock().Sub(m.revealStart)
+	rendered := 0
 	for i, s := range m.filtered {
-		b.WriteString(m.renderRow(s, i == m.cursor))
-		if i < len(m.filtered)-1 {
+		// Streaming reveal (PRD §5.3): rows appear staggered rather than
+		// all at once. Since Lister.List isn't actually streaming, this
+		// simulates the cascade against the already-resolved list — a row
+		// not yet due simply isn't drawn this frame, so the list visibly
+		// grows over ~400ms after each scan.
+		if !anim.Revealed(i, revealElapsed) {
+			break
+		}
+		if rendered > 0 {
 			b.WriteString("\n")
 		}
+		b.WriteString(m.renderRow(s, i == m.cursor))
+		rendered++
 	}
 	return b.String()
 }
@@ -92,6 +108,14 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 		output.FormatUptime(s.Uptime), colUptime,
 	)
 
+	if m.isDying(s) {
+		stage := anim.FadeOutStage(m.clock().Sub(m.dyingStart), killDissolveDuration)
+		if stage < anim.FadeStages/2 {
+			return m.th.Success.Render(row)
+		}
+		return m.th.Muted.Render(row)
+	}
+
 	switch {
 	case selected:
 		return m.th.Selected.Render(row)
@@ -100,6 +124,10 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 	default:
 		return row
 	}
+}
+
+func (m Model) isDying(s scan.Service) bool {
+	return m.dying != nil && m.dying.PID == s.PID && m.dying.Port == s.Port
 }
 
 // padColumns takes alternating (value, width) pairs and left-pads each
@@ -126,6 +154,8 @@ func (m Model) hintBar() string {
 		return "enter apply · esc cancel"
 	case modeConfirmKill, modeConfirmEscalate:
 		return "y confirm · any other key cancel"
+	case modeKilling:
+		return "working…"
 	default:
 		return "↑↓ nav · k kill · K force · / filter · r refresh · ? help · q quit"
 	}

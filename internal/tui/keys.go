@@ -14,6 +14,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmEscalateKey(msg)
 	case modeHelp:
 		return m.handleHelpKey(msg)
+	case modeKilling:
+		// An operation is in flight; ignore input except quit rather than
+		// let it fall through to nav/kill handling and start a second one.
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
 	default:
 		return m.handleNormalKey(msg)
 	}
@@ -44,6 +52,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.scanning = true
+		m.scanStart = m.clock()
 		m.status = "scanning sockets"
 		return m, m.scanCmd()
 
@@ -111,12 +120,14 @@ func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		target := *m.pending
+		m.mode = modeKilling
+		m.killStart = m.clock()
 		m.status = "sending kill signal…"
 		return m, m.killCmd(target, m.force)
 	default:
 		m.mode = modeNormal
 		m.pending = nil
-		m.status = "kill cancelled"
+		m.setEphemeralStatus("kill cancelled", ephemeralStatusDuration)
 		return m, nil
 	}
 }
@@ -125,12 +136,14 @@ func (m Model) handleConfirmEscalateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		target := *m.pending
+		m.mode = modeKilling
+		m.killStart = m.clock()
 		m.status = "sending force kill…"
 		return m, m.escalateCmd(target)
 	default:
 		m.mode = modeNormal
 		m.pending = nil
-		m.status = "kill cancelled"
+		m.setEphemeralStatus("kill cancelled", ephemeralStatusDuration)
 		return m, nil
 	}
 }
