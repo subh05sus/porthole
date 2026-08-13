@@ -10,17 +10,21 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/scan/lsoffmt"
 )
 
-type darwinLister struct{}
+type darwinLister struct {
+	lookup proc.Lookup
+}
 
 // NewDefaultLister returns the macOS scanner: shells out to lsof in field
 // output mode (machine-parseable, per PRD §7.2) rather than parsing the
-// human-readable table.
-func NewDefaultLister() Lister { return darwinLister{} }
+// human-readable table. Process metadata beyond name/PID comes from
+// internal/proc's ps/lsof-based resolver.
+func NewDefaultLister() Lister { return darwinLister{lookup: proc.NewDefaultLookup()} }
 
-func (darwinLister) List(ctx context.Context) ([]Service, error) {
+func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 	cmd := exec.CommandContext(ctx, "lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n", "-F", "pcnPu")
 
 	var stdout, stderr bytes.Buffer
@@ -45,13 +49,23 @@ func (darwinLister) List(ctx context.Context) ([]Service, error) {
 
 	services := make([]Service, 0, len(sockets))
 	for _, s := range sockets {
-		services = append(services, Service{
+		svc := Service{
 			Port:    s.Port,
 			Proto:   ProtoTCP,
 			Addr:    s.Host,
 			PID:     s.PID,
 			Process: s.Command,
-		})
+		}
+		if info, err := l.lookup.Lookup(s.PID); err == nil {
+			svc.Cmdline = info.Cmdline
+			svc.User = info.User
+			svc.CWD = info.CWD
+			svc.StartTime = info.StartTime
+			svc.Uptime = info.Uptime
+		} else {
+			svc.ResolveErr = err
+		}
+		services = append(services, svc)
 	}
 	return services, nil
 }
