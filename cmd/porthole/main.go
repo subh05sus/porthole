@@ -2,11 +2,20 @@
 package main
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/subh05sus/porthole/internal/cli"
+	"github.com/subh05sus/porthole/internal/kill"
+	"github.com/subh05sus/porthole/internal/scan"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "porthole: not implemented yet")
-	os.Exit(1)
+	app := &cli.App{
+		Lister: scan.NewDefaultLister(),
+		Killer: kill.NewDefaultKiller(),
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
+	os.Exit(cli.Execute(app, os.Args[1:]))
 }
