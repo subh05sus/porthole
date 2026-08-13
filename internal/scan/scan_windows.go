@@ -85,17 +85,22 @@ func (l windowsLister) List(ctx context.Context) ([]Service, error) {
 	services = append(services, v6...)
 
 	for i := range services {
-		info, err := l.lookup.Lookup(services[i].PID)
-		if err != nil {
+		owned, permErr := checkOwned(services[i].PID)
+		services[i].Owned = owned
+
+		if info, err := l.lookup.Lookup(services[i].PID); err == nil {
+			services[i].Process = info.Process
+			services[i].Cmdline = info.Cmdline
+			services[i].User = info.User
+			services[i].CWD = info.CWD
+			services[i].StartTime = info.StartTime
+			services[i].Uptime = info.Uptime
+		} else {
 			services[i].ResolveErr = err
-			continue
 		}
-		services[i].Process = info.Process
-		services[i].Cmdline = info.Cmdline
-		services[i].User = info.User
-		services[i].CWD = info.CWD
-		services[i].StartTime = info.StartTime
-		services[i].Uptime = info.Uptime
+		if !owned && services[i].ResolveErr == nil {
+			services[i].ResolveErr = permErr
+		}
 	}
 
 	return services, nil

@@ -61,6 +61,10 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 			}
 			if pid, ok := inodeToPID[e.Inode]; ok {
 				svc.PID = pid
+
+				owned, permErr := checkOwned(pid)
+				svc.Owned = owned
+
 				if info, err := l.lookup.Lookup(pid); err == nil {
 					svc.Process = info.Process
 					svc.Cmdline = info.Cmdline
@@ -68,8 +72,11 @@ func (l linuxLister) List(ctx context.Context) ([]Service, error) {
 					svc.CWD = info.CWD
 					svc.StartTime = info.StartTime
 					svc.Uptime = info.Uptime
-				} else {
+				} else if svc.ResolveErr == nil {
 					svc.ResolveErr = err
+				}
+				if !owned && svc.ResolveErr == nil {
+					svc.ResolveErr = permErr
 				}
 			} else {
 				svc.ResolveErr = fmt.Errorf("scan: no process found for socket inode %d (permission denied or race)", e.Inode)

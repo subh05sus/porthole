@@ -56,6 +56,9 @@ func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 			PID:     s.PID,
 			Process: s.Command,
 		}
+		owned, permErr := checkOwned(s.PID)
+		svc.Owned = owned
+
 		if info, err := l.lookup.Lookup(s.PID); err == nil {
 			svc.Cmdline = info.Cmdline
 			svc.User = info.User
@@ -64,6 +67,9 @@ func (l darwinLister) List(ctx context.Context) ([]Service, error) {
 			svc.Uptime = info.Uptime
 		} else {
 			svc.ResolveErr = err
+		}
+		if !owned && svc.ResolveErr == nil {
+			svc.ResolveErr = permErr
 		}
 		services = append(services, svc)
 	}
