@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/restart"
@@ -46,6 +47,7 @@ type App struct {
 	Killer  kill.Killer
 	Lookup  proc.Lookup     // used by restart to capture cmdline/cwd/env
 	Spawner restart.Spawner // used by restart to respawn
+	Config  config.Config   // protected ports, theme/animation preferences
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer

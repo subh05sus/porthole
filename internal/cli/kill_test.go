@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/kill/killtest"
 	"github.com/subh05sus/porthole/internal/scan"
@@ -214,5 +215,81 @@ func TestParsePortsInvalidPortErrors(t *testing.T) {
 	_, err := parsePorts([]string{"not-a-port"})
 	if err == nil {
 		t.Fatalf("expected error for non-numeric port")
+	}
+}
+
+func TestKillProtectedPortRequiresTypedConfirmation(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: services},
+		Killer: killer,
+		Config: config.Config{Protected: []config.ProtectedPort{{Port: 5432, Reason: "prod db"}}},
+		Stdin:  strings.NewReader("5432\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"kill", "5432"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0: stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "protected") || !strings.Contains(stdout.String(), "prod db") {
+		t.Fatalf("expected the protected-port prompt to mention the reason, got %q", stdout.String())
+	}
+	if len(killer.ExecuteCalls) != 1 {
+		t.Fatalf("expected Execute called once after correct typed confirmation, got %d", len(killer.ExecuteCalls))
+	}
+}
+
+func TestKillProtectedPortWrongTypedInputSkips(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: services},
+		Killer: killer,
+		Config: config.Config{Protected: []config.ProtectedPort{{Port: 5432}}},
+		Stdin:  strings.NewReader("y\n"), // a plain "y" must NOT satisfy a typed-port confirmation
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"kill", "5432"})
+	if code != ExitSuccess {
+		// Matches this codebase's existing precedent for a plain declined
+		// y/n confirmation (TestKillDeclinedConfirmationSkips): skipping is
+		// not itself an error, exit 0 either way — what matters here is
+		// that Execute was never called.
+		t.Fatalf("got exit code %d, want %d", code, ExitSuccess)
+	}
+	if !strings.Contains(stdout.String(), "did not match") {
+		t.Fatalf("missing skip message: %q", stdout.String())
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("expected Execute never called on a wrong/incomplete typed confirmation, got %d calls", len(killer.ExecuteCalls))
+	}
+}
+
+func TestKillProtectedPortYesFlagDoesNotBypassConfirmation(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 5432, PID: 1, Process: "postgres", Owned: true}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: services},
+		Killer: killer,
+		Config: config.Config{Protected: []config.ProtectedPort{{Port: 5432}}},
+		Stdin:  strings.NewReader(""), // empty input: never types the port
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"kill", "5432", "--yes"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want %d", code, ExitSuccess)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("--yes must not bypass protected-port confirmation, got %d Execute calls", len(killer.ExecuteCalls))
 	}
 }

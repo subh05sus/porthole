@@ -77,7 +77,23 @@ func runKill(app *App, args []string, force, dryRun, yes bool, project string) e
 
 	reader := bufio.NewReader(app.Stdin)
 	for _, s := range targets {
-		if !yes {
+		if protected, reason := app.Config.IsProtected(s.Port); protected {
+			// Protected ports always require typed confirmation — --yes
+			// does not bypass this, per v1.3's "no shortcuts for protected
+			// ports" design: a script that blindly passes --yes should not
+			// be able to silently take down something the user explicitly
+			// marked as protected.
+			prompt := fmt.Sprintf("port :%d is protected", s.Port)
+			if reason != "" {
+				prompt += " (" + reason + ")"
+			}
+			fmt.Fprintf(app.Stdout, "%s. Type %d to confirm killing %s: ", prompt, s.Port, s.Process)
+			line, _ := reader.ReadString('\n')
+			if strings.TrimSpace(line) != strconv.Itoa(s.Port) {
+				fmt.Fprintf(app.Stdout, "skipped :%d (confirmation did not match)\n", s.Port)
+				continue
+			}
+		} else if !yes {
 			fmt.Fprintf(app.Stdout, "kill %s on :%d? (y/n) ", s.Process, s.Port)
 			line, _ := reader.ReadString('\n')
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
