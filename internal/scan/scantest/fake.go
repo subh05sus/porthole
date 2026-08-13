@@ -9,6 +9,8 @@ import (
 	"github.com/subh05sus/porthole/internal/scan"
 )
 
+var _ scan.Lister = (*FakeLister)(nil)
+
 // FakeLister returns a scripted result (or error) from List, optionally
 // after waiting for a caller-controlled signal — useful for exercising
 // timeout and cancellation behavior deterministically.
