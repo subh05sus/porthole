@@ -33,6 +33,18 @@ type Service struct {
 	// unresolved. Populated by enrich.go, not by the raw OS scanners.
 	Project string
 
+	// Container, ContainerImage, and ContainerID are populated only when
+	// this service's port matches a running container's published port
+	// mapping (internal/container's AwareLister decorator). Container is a
+	// display name (leading "/" stripped); ContainerID is the raw ID used
+	// to route a kill through `docker stop` instead of signaling PID
+	// directly. All three are "" when no container runtime is reachable or
+	// no container publishes this port — container awareness is enrichment
+	// on top of the core scan, never a requirement for it.
+	Container      string
+	ContainerImage string
+	ContainerID    string
+
 	// StartTime is an opaque, OS-specific process start-time value (jiffies
 	// since boot on Linux, a FILETIME on Windows, a lstart timestamp on
 	// macOS). It has no meaning across platforms and no meaning as a wall
