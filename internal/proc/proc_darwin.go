@@ -42,14 +42,33 @@ func (darwinLookup) Lookup(pid int) (Info, error) {
 	// Best-effort: a missing full command line shouldn't fail the whole
 	// lookup, since the process name and start time are already known.
 	argsOut, _ := runPS(pid, "args=")
+	cmdline := strings.TrimSpace(argsOut)
 
 	return Info{
-		Process:   strings.TrimSpace(commOut),
-		Cmdline:   strings.TrimSpace(argsOut),
-		User:      strings.TrimSpace(userOut),
-		CWD:       lookupCWD(pid),
+		Process: strings.TrimSpace(commOut),
+		Cmdline: cmdline,
+		// ps -o comm= reports the full executable path on macOS (unlike
+		// Linux's 15-char-truncated /proc/pid/stat comm field), so it
+		// doubles as ExePath here.
+		ExePath: strings.TrimSpace(commOut),
+		User:    strings.TrimSpace(userOut),
+		CWD:     lookupCWD(pid),
+		// Best-effort whitespace split — lossy for quoted/spaced arguments,
+		// since ps's `args=` output is already shell-joined and there's no
+		// way to recover the original argv boundaries from it exactly.
+		// Acceptable degradation given restart already refuses on this
+		// platform over the environment gap below; this only matters if a
+		// caller uses Argv directly instead of Cmdline.
+		Argv:      strings.Fields(cmdline),
 		StartTime: uint64(startedAt.Unix()),
 		Uptime:    time.Since(startedAt),
+		// Reading another process's environment on macOS needs root
+		// (there is no /proc/pid/environ equivalent, and the documented
+		// approach — sysctl KERN_PROCARGS2 — only exposes it to the owning
+		// user or root, and even then parsing it reliably is genuinely
+		// painful per FUTURE_PLANS.md's own assessment). restart refuses
+		// honestly here rather than respawn with a guessed-at environment.
+		EnvErr: fmt.Errorf("proc: reading another process's environment is not supported on macOS without root"),
 	}, nil
 }
 

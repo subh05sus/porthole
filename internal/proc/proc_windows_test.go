@@ -21,6 +21,7 @@ func TestLookupAgainstRealSpawnedProcess(t *testing.T) {
 
 	cmd := exec.Command("ping", "-n", "20", "127.0.0.1")
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PORTHOLE_TEST_MARKER=verify12345")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start child process: %v", err)
 	}
@@ -65,5 +66,23 @@ func TestLookupAgainstRealSpawnedProcess(t *testing.T) {
 	}
 	if info.StartTime == 0 {
 		t.Errorf("StartTime = 0, want a non-zero FILETIME-derived value")
+	}
+
+	if info.EnvErr != nil {
+		t.Errorf("EnvErr = %v, want nil", info.EnvErr)
+	}
+	found := false
+	for _, kv := range info.Env {
+		if kv == "PORTHOLE_TEST_MARKER=verify12345" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Env does not contain the marker variable we set; got %d entries", len(info.Env))
+	}
+
+	if info.ExePath == "" || !strings.Contains(strings.ToLower(info.ExePath), "ping.exe") {
+		t.Errorf("ExePath = %q, want it to contain ping.exe", info.ExePath)
 	}
 }

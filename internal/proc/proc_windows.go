@@ -29,8 +29,10 @@ func (windowsLookup) Lookup(pid int) (Info, error) {
 
 	info := Info{}
 
-	if name, err := queryImageName(h); err == nil {
-		info.Process = name
+	if full, err := queryImageNameFull(h); err == nil {
+		info.ExePath = full
+		base := filepath.Base(full)
+		info.Process = strings.TrimSuffix(base, filepath.Ext(base))
 	}
 
 	var creation, exit, kernel, user windows.Filetime
@@ -46,18 +48,22 @@ func (windowsLookup) Lookup(pid int) (Info, error) {
 		info.CWD = cwd
 	}
 
+	if env, err := readProcessEnvironment(h); err == nil {
+		info.Env = env
+	} else {
+		info.EnvErr = err
+	}
+
 	return info, nil
 }
 
-func queryImageName(h windows.Handle) (string, error) {
+func queryImageNameFull(h windows.Handle) (string, error) {
 	buf := make([]uint16, windows.MAX_PATH)
 	size := uint32(len(buf))
 	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
 		return "", err
 	}
-	full := windows.UTF16ToString(buf[:size])
-	base := filepath.Base(full)
-	return strings.TrimSuffix(base, filepath.Ext(base)), nil
+	return windows.UTF16ToString(buf[:size]), nil
 }
 
 func filetimeToUint64(ft windows.Filetime) uint64 {

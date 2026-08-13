@@ -61,11 +61,22 @@ func (linuxLookup) Lookup(pid int) (Info, error) {
 	}
 
 	if cmdData, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil {
-		info.Cmdline = strings.Join(procfmt.ParseCmdline(cmdData), " ")
+		info.Argv = procfmt.ParseCmdline(cmdData)
+		info.Cmdline = strings.Join(info.Argv, " ")
 	}
 
 	if cwd, err := os.Readlink(filepath.Join(dir, "cwd")); err == nil {
 		info.CWD = cwd
+	}
+
+	if exe, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
+		info.ExePath = exe
+	}
+
+	if envData, err := os.ReadFile(filepath.Join(dir, "environ")); err == nil {
+		info.Env = procfmt.ParseCmdline(envData) // same NUL-separated format
+	} else {
+		info.EnvErr = fmt.Errorf("proc: reading environ: %w", err)
 	}
 
 	if uid, err := readUID(dir); err == nil {
