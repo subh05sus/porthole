@@ -1,0 +1,28 @@
+# Maintainer: (unclaimed — this template isn't registered on the AUR yet)
+#
+# AUR PKGBUILD template, matching GoReleaser's standard output shape. Not
+# submitted to the AUR — per FUTURE_PLANS.md's own roadmap ("AUR package
+# if Arch users show up asking"), this is prepared ahead of time, not
+# published. {{ VERSION }}/{{ SHA256_* }} need filling in from a real
+# release before this could actually build.
+
+pkgname=porthole
+pkgver={{ VERSION }}
+pkgrel=1
+pkgdesc="A port kill switch and service viewer for your terminal"
+arch=('x86_64' 'aarch64')
+url="https://github.com/subh05sus/porthole"
+license=('MIT')
+provides=('porthole')
+conflicts=('porthole')
+
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::https://github.com/subh05sus/porthole/releases/download/v$pkgver/porthole_${pkgver}_linux_amd64.tar.gz")
+sha256sums_x86_64=('{{ SHA256_LINUX_AMD64 }}')
+
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::https://github.com/subh05sus/porthole/releases/download/v$pkgver/porthole_${pkgver}_linux_arm64.tar.gz")
+sha256sums_aarch64=('{{ SHA256_LINUX_ARM64 }}')
+
+package() {
+  install -Dm755 "$srcdir/porthole" "$pkgdir/usr/bin/porthole"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

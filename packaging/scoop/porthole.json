@@ -1,0 +1,30 @@
+{
+  "version": "{{ VERSION }}",
+  "description": "A port kill switch and service viewer for your terminal.",
+  "homepage": "https://github.com/subh05sus/porthole",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/subh05sus/porthole/releases/download/v{{ VERSION }}/porthole_{{ VERSION }}_windows_amd64.zip",
+      "hash": "{{ SHA256_WINDOWS_AMD64 }}"
+    },
+    "arm64": {
+      "url": "https://github.com/subh05sus/porthole/releases/download/v{{ VERSION }}/porthole_{{ VERSION }}_windows_arm64.zip",
+      "hash": "{{ SHA256_WINDOWS_ARM64 }}"
+    }
+  },
+  "bin": "porthole.exe",
+  "checkver": {
+    "github": "https://github.com/subh05sus/porthole"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/subh05sus/porthole/releases/download/v$version/porthole_$version_windows_amd64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/subh05sus/porthole/releases/download/v$version/porthole_$version_windows_arm64.zip"
+      }
+    }
+  }
+}

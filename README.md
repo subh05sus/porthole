@@ -10,4 +10,12 @@ porthole list             # table to stdout
 porthole kill 3000        # SIGTERM, escalate after 2s
 ```
 
+## Install
+
+```bash
+go install github.com/subh05sus/porthole/cmd/porthole@latest
+```
+
+Prebuilt binaries, a Homebrew tap, and a Scoop bucket are planned (see `.goreleaser.yaml` and `install.sh`) but not published yet — `go install` is the only way to get porthole today.
+
 Status: pre-release, under active development.

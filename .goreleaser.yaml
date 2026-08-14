@@ -1,0 +1,84 @@
+# GoReleaser config for porthole — local tooling only this session, never
+# run against a real release (no GitHub remote push, no tag, no publish).
+# NOT verified against a real `goreleaser` binary: goreleaser isn't
+# installed in this dev environment. Run `goreleaser check` and
+# `goreleaser release --snapshot --clean` before trusting this against a
+# real release.
+version: 2
+
+project_name: porthole
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: porthole
+    main: ./cmd/porthole
+    binary: porthole
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/subh05sus/porthole/internal/cli.Version={{ .Version }}
+
+archives:
+  - id: porthole
+    ids: [porthole]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: subh05sus
+    name: porthole
+  # Local-only this session per explicit user choice — draft rather than
+  # auto-published, so a stray `goreleaser release` run doesn't publish
+  # anything without a deliberate follow-up click.
+  draft: true
+
+brews:
+  - name: porthole
+    repository:
+      owner: subh05sus
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/subh05sus/porthole"
+    description: "A port kill switch and service viewer for your terminal."
+    license: "MIT"
+
+scoops:
+  - name: porthole
+    repository:
+      owner: subh05sus
+      name: scoop-bucket
+    homepage: "https://github.com/subh05sus/porthole"
+    description: "A port kill switch and service viewer for your terminal."
+    license: "MIT"
