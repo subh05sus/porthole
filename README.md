@@ -159,6 +159,27 @@ Requires Go 1.26+. No cgo, no external dependencies beyond the Go module graph �
 - [ROADMAP.md](ROADMAP.md) — what's shipped, what's not verified yet, what's next
 - [CHANGELOG.md](CHANGELOG.md) — release history
 
+## Support the project
+
+Porthole is free and open source, and that isn't going to change. If it's saved you time, or you'd like to help fund the work, you can back it directly:
+
+<p align="center">
+  <a href="https://github.com/sponsors/subh05sus">
+    <img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor on GitHub Sponsors">
+  </a>
+  <a href="https://www.buymeacoffee.com/subhadipsaha">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee">
+  </a>
+  <a href="https://wise.com/pay/me/subhadips25">
+    <img src="https://img.shields.io/badge/Support%20via%20Wise-9FE870?style=for-the-badge&logo=wise&logoColor=163300&labelColor=9FE870" alt="Support via Wise">
+  </a>
+  <a href="https://www.paypal.com/paypalme/Subh70">
+    <img src="https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="PayPal">
+  </a>
+</p>
+
+Can't chip in right now? A star, a share, or a solid bug report counts for just as much. Thank you.
+
 ## Contributing
 
 Bug reports, feature requests, and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
