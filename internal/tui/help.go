@@ -14,6 +14,7 @@ var helpEntries = []struct {
 	{"space", "toggle multi-select for bulk kill"},
 	{"enter", "detail pane: full cmdline, cwd, user, socket list"},
 	{"/", "fuzzy filter by port, process, or project"},
+	{"a", "toggle showing rows hidden by display.hide_* in ~/.porthole.yaml"},
 	{"w", "toggle watch mode (live-updating list)"},
 	{"r", "manual refresh"},
 	{"?", "toggle this help"},

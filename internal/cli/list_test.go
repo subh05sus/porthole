@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/scan"
 	"github.com/subh05sus/porthole/internal/scan/scantest"
 )
@@ -96,6 +97,75 @@ func TestListContainersFilter(t *testing.T) {
 	out := stdout.String()
 	if strings.Contains(out, "3000") || !strings.Contains(out, "5434") {
 		t.Fatalf("--containers filter did not apply: %q", out)
+	}
+}
+
+func TestListHidesUnownedWhenConfigured(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: []scan.Service{
+			{Port: 3000, Process: "node", Owned: true},
+			{Port: 22, Process: "sshd", Owned: false},
+		}},
+		Config: config.Config{Display: config.Display{HideSystemProcesses: true}},
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"list"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "sshd") || !strings.Contains(out, "node") {
+		t.Fatalf("expected the unowned row hidden, got %q", out)
+	}
+}
+
+func TestListHidesPrivilegedPortsWhenConfigured(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: []scan.Service{
+			{Port: 3000, Process: "node", Owned: true},
+			{Port: 80, Process: "nginx", Owned: true},
+		}},
+		Config: config.Config{Display: config.Display{HidePrivilegedPorts: true}},
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"list"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "nginx") || !strings.Contains(out, "node") {
+		t.Fatalf("expected the privileged-port row hidden, got %q", out)
+	}
+}
+
+func TestListAllFlagOverridesDisplayConfig(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: []scan.Service{
+			{Port: 3000, Process: "node", Owned: true},
+			{Port: 22, Process: "sshd", Owned: false},
+		}},
+		Config: config.Config{Display: config.Display{HideSystemProcesses: true}},
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"list", "--all"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "sshd") {
+		t.Fatalf("expected --all to override the hide_system_processes config, got %q", out)
 	}
 }
 

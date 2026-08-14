@@ -24,9 +24,10 @@ porthole kill 3000 --force
 ## Clearing out everything you're running for local dev
 
 ```bash
-# Kill everything you own listening in 3000-9999 — the common dev port
-# range. Locked (not-owned) rows and empty ports are silently skipped,
-# since this is a broad sweep, not a precise target list.
+# Kill everything you own listening in the configured dev port range
+# (kill.dev_port_range in ~/.porthole.yaml, default 3000-9999). Locked
+# (not-owned) rows and empty ports are silently skipped, since this is a
+# broad sweep, not a precise target list.
 porthole kill --dev
 ```
 
@@ -97,6 +98,23 @@ porthole list --since 5m          # only services started in the last 5 minutes
 porthole list --containers        # only services published by a running container
 ```
 
+## Hiding system/privileged noise by default
+
+If you mostly care about your own dev services, set a default in `~/.porthole.yaml` instead of squinting past dozens of locked system rows every time:
+
+```yaml
+display:
+  hide_system_processes: true   # hide rows you don't own (can't kill anyway)
+  hide_privileged_ports: true   # hide ports < 1024, regardless of ownership
+```
+
+```bash
+porthole list          # only your own, non-privileged services now
+porthole list --all    # see everything for just this one run
+```
+
+Same config applies to `watch`, and the TUI has an `a` key that does the same thing as `--all` for the current session. None of this ever changes what `porthole kill <port>` can target — it's display-only, so a hidden row is still there, just not shown by default.
+
 ## Watch mode
 
 ```bash
@@ -106,8 +124,17 @@ porthole watch
 # Rescan every 5s instead of the default 2s
 porthole watch --interval 5s
 
+# Same thing, but as a persistent default instead of typing the flag every
+# time — ~/.porthole.yaml:
+#   watch:
+#     interval: 5s
+# The --interval flag still overrides this for a single run when passed.
+
 # Get a desktop notification whenever a new service starts listening
 porthole watch --notify
+
+# See everything for this run, ignoring display.hide_* settings
+porthole watch --all
 ```
 
 Sample output:
@@ -155,6 +182,7 @@ Start conservative — allow-list one thing, dry-run first:
 # ~/.porthole.yaml
 auto_kill:
   enabled: true
+  interval: 5s      # how often the daemon polls — separate from the cooldown below
   allow:
     - port: 3000
       process: node
@@ -166,11 +194,14 @@ porthole daemon
 # porthole daemon starting (dry-run mode, 1 allow-list entry)
 # [dry-run] would kill node on :3000 (pid 48211)
 
+# Poll more often than the configured default for this one run
+porthole daemon --interval 2s
+
 # Once you trust it, actually enable real kills
 porthole daemon --live
 ```
 
-Every match is re-verified against a fresh scan immediately before acting, and each port has a 30s cooldown after any kill attempt — a crash-looping process can't be killed in a tight loop.
+Every match is re-verified against a fresh scan immediately before acting, and each port has a 30s cooldown after any kill attempt — a crash-looping process can't be killed in a tight loop. That cooldown isn't the same thing as `auto_kill.interval` above: interval is how often the daemon *looks*, cooldown is how long it waits before acting on the *same port* again after a kill — and the cooldown itself isn't configurable.
 
 ## Firewall rules
 

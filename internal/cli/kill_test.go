@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
@@ -340,5 +341,82 @@ func TestKillDevCannotCombineWithExplicitPorts(t *testing.T) {
 	code := Execute(app, []string{"kill", "--dev", "3000"})
 	if code != ExitNotFound {
 		t.Fatalf("got exit code %d, want %d", code, ExitNotFound)
+	}
+}
+
+func TestKillDevUsesConfiguredPortRange(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{
+		{Port: 9005, PID: 1, Process: "node", Owned: true},  // in the configured 9000-9010 range
+		{Port: 3000, PID: 2, Process: "other", Owned: true}, // outside the configured range, must be ignored
+	}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: services},
+		Killer: killer,
+		Config: config.Config{Kill: config.Kill{DevPortRange: "9000-9010"}},
+		Stdin:  strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"kill", "--dev", "--yes"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0: stderr=%q", code, stderr.String())
+	}
+	if len(killer.ExecuteCalls) != 1 || killer.ExecuteCalls[0].Target.PID != 1 {
+		t.Fatalf("expected only the port-9005 target killed (configured range), got %+v", killer.ExecuteCalls)
+	}
+}
+
+func TestKillDevFallsBackToDefaultRangeWhenConfigEmpty(t *testing.T) {
+	// Explicit regression guard for the "" -> "3000-9999" in-function
+	// fallback: newKillTestApp never sets App.Config, so
+	// app.Config.Kill.DevPortRange is "" here.
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	app, _, stderr := newKillTestApp(services, killer, "")
+
+	code := Execute(app, []string{"kill", "--dev", "--yes"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0: stderr=%q", code, stderr.String())
+	}
+	if len(killer.ExecuteCalls) != 1 {
+		t.Fatalf("expected the default 3000-9999 range to still catch port 3000, got %+v", killer.ExecuteCalls)
+	}
+}
+
+func TestKillEscalationTimeoutPassedToKillerOptions(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: &scantest.FakeLister{Services: services},
+		Killer: killer,
+		Config: config.Config{Kill: config.Kill{EscalationTimeout: config.Duration(5 * time.Second)}},
+		Stdin:  strings.NewReader("y\n"), Stdout: &stdout, Stderr: &stderr,
+	}
+
+	code := Execute(app, []string{"kill", "3000"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0: stderr=%q", code, stderr.String())
+	}
+	if len(killer.ExecuteCalls) != 1 || killer.ExecuteCalls[0].Opts.PollTimeout != 5*time.Second {
+		t.Fatalf("expected PollTimeout=5s passed to Execute, got %+v", killer.ExecuteCalls)
+	}
+}
+
+func TestKillEscalationTimeoutZeroWhenConfigUnset(t *testing.T) {
+	// newKillTestApp never sets App.Config, so PollTimeout is passed as 0
+	// straight through — kill.Options.withDefaults() (not cli/kill.go) is
+	// what supplies the built-in 2s default, verified elsewhere in
+	// internal/kill's own test suite.
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	app, _, _ := newKillTestApp([]scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}, killer, "y\n")
+
+	code := Execute(app, []string{"kill", "3000"})
+	if code != ExitSuccess {
+		t.Fatalf("got exit code %d, want 0", code)
+	}
+	if len(killer.ExecuteCalls) != 1 || killer.ExecuteCalls[0].Opts.PollTimeout != 0 {
+		t.Fatalf("expected PollTimeout=0 passed through when config is unset, got %+v", killer.ExecuteCalls)
 	}
 }

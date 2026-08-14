@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/subh05sus/porthole/internal/kill"
+	"github.com/subh05sus/porthole/internal/portrange"
 	"github.com/subh05sus/porthole/internal/scan"
 )
 
@@ -35,17 +37,21 @@ func newKillCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be killed, do nothing")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt")
 	cmd.Flags().StringVar(&project, "project", "", "kill everything owned by this project")
-	cmd.Flags().BoolVar(&dev, "dev", false, "kill everything you own in the common dev port range (3000-9999)")
+	cmd.Flags().BoolVar(&dev, "dev", false, "kill everything you own in the configured dev port range (kill.dev_port_range in ~/.porthole.yaml, default 3000-9999)")
 
 	return cmd
 }
 
 func runKill(app *App, args []string, force, dryRun, yes, dev bool, project string) error {
+	devRange := app.Config.Kill.DevPortRange
+	if devRange == "" {
+		devRange = "3000-9999"
+	}
 	if dev {
 		if len(args) > 0 || project != "" {
 			return exitErr(ExitNotFound, errors.New("--dev cannot be combined with explicit ports or --project"))
 		}
-		args = []string{"3000-9999"}
+		args = []string{devRange}
 	}
 	if project != "" && len(args) > 0 {
 		return exitErr(ExitNotFound, errors.New("specify either ports or --project, not both"))
@@ -81,7 +87,7 @@ func runKill(app *App, args []string, force, dryRun, yes, dev bool, project stri
 		}
 		targets = owned
 		if len(targets) == 0 {
-			fmt.Fprintln(app.Stdout, "nothing owned to kill in 3000-9999")
+			fmt.Fprintf(app.Stdout, "nothing owned to kill in %s\n", devRange)
 			return nil
 		}
 	} else {
@@ -133,7 +139,15 @@ func runKill(app *App, args []string, force, dryRun, yes, dev bool, project stri
 		}
 
 		target := kill.Target{PID: s.PID, StartTime: s.StartTime, Owned: s.Owned, ContainerID: s.ContainerID}
-		res, killErr := app.Killer.Execute(ctx, target, kill.Options{Force: force, AutoEscalate: true})
+		// PollTimeout is 0 whenever app.Config.Kill.EscalationTimeout is
+		// unset (e.g. tests that build App{} directly) — kill.Options.
+		// withDefaults() already treats <=0 as "use the built-in 2s
+		// default," so no fallback guard is needed here.
+		res, killErr := app.Killer.Execute(ctx, target, kill.Options{
+			Force:        force,
+			AutoEscalate: true,
+			PollTimeout:  time.Duration(app.Config.Kill.EscalationTimeout),
+		})
 		code, msg := classifyKillResult(s, res, killErr)
 		if code == ExitSuccess {
 			fmt.Fprintln(app.Stdout, msg)
@@ -188,32 +202,18 @@ func resolveTargets(services []scan.Service, args []string, project string) (tar
 func parsePorts(args []string) ([]int, error) {
 	var ports []int
 	seen := make(map[int]bool)
-	add := func(p int) {
-		if !seen[p] {
-			seen[p] = true
-			ports = append(ports, p)
-		}
-	}
 
 	for _, arg := range args {
-		if lo, hi, ok := strings.Cut(arg, "-"); ok {
-			loN, errLo := strconv.Atoi(strings.TrimSpace(lo))
-			hiN, errHi := strconv.Atoi(strings.TrimSpace(hi))
-			if errLo == nil && errHi == nil {
-				if loN > hiN {
-					return nil, fmt.Errorf("invalid port range %q: start greater than end", arg)
-				}
-				for p := loN; p <= hiN; p++ {
-					add(p)
-				}
-				continue
+		expanded, err := portrange.Parse(arg)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range expanded {
+			if !seen[p] {
+				seen[p] = true
+				ports = append(ports, p)
 			}
 		}
-		p, err := strconv.Atoi(strings.TrimSpace(arg))
-		if err != nil {
-			return nil, fmt.Errorf("invalid port %q", arg)
-		}
-		add(p)
 	}
 	return ports, nil
 }

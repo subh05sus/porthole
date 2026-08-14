@@ -19,6 +19,7 @@ func newListCmd(app *App) *cobra.Command {
 		projectFilter  string
 		since          time.Duration
 		containersOnly bool
+		all            bool
 	)
 
 	cmd := &cobra.Command{
@@ -31,6 +32,9 @@ func newListCmd(app *App) *cobra.Command {
 			}
 
 			services = filterServices(services, portFilter, projectFilter, since, containersOnly)
+			if !all {
+				services = scan.FilterDisplay(services, app.Config.Display.HideSystemProcesses, app.Config.Display.HidePrivilegedPorts)
+			}
 
 			switch {
 			case asJSON:
@@ -49,6 +53,7 @@ func newListCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&projectFilter, "project", "", "filter by detected project name")
 	cmd.Flags().DurationVar(&since, "since", 0, "only show services started within this long ago (e.g. 5m)")
 	cmd.Flags().BoolVar(&containersOnly, "containers", false, "only show services published by a running container")
+	cmd.Flags().BoolVar(&all, "all", false, "show every service, ignoring display.hide_* settings in ~/.porthole.yaml")
 
 	return cmd
 }

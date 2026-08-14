@@ -136,6 +136,11 @@ type Model struct {
 	watchEvents  <-chan scan.Event
 	watchPulseOn bool
 
+	// showAll bypasses config.Display's hide_* filters for this session
+	// when true — toggled by the 'a' keybinding, mirroring the CLI's --all
+	// flag. Session-scoped only, never persisted.
+	showAll bool
+
 	status       string
 	statusExpiry time.Time // while non-zero and in the future, status overrides computeNormalStatus
 	scanErr      error
@@ -280,7 +285,7 @@ func (m Model) handleRestartResult(msg restartResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.fadingOut = append(m.fadingOut, fadeEntry{service: msg.target, startedAt: m.clock(), triggersRescan: true})
-	m.setEphemeralStatus(fmt.Sprintf("restarted %s on :%d", msg.target.Process, msg.target.Port), killDissolveDuration)
+	m.setEphemeralStatus(fmt.Sprintf("restarted %s on :%d", msg.target.Process, msg.target.Port), m.dissolveDuration())
 	return m, nil
 }
 
@@ -496,8 +501,9 @@ func (m Model) handleTick() (tea.Model, tea.Cmd) {
 	if len(m.fadingOut) > 0 {
 		remaining := m.fadingOut[:0:0]
 		needsRescan := false
+		dissolve := m.dissolveDuration()
 		for _, f := range m.fadingOut {
-			if anim.FadeOutComplete(m.clock().Sub(f.startedAt), killDissolveDuration) {
+			if anim.FadeOutComplete(m.clock().Sub(f.startedAt), dissolve) {
 				if f.triggersRescan {
 					needsRescan = true
 				}
@@ -512,7 +518,7 @@ func (m Model) handleTick() (tea.Model, tea.Cmd) {
 	}
 
 	for key, at := range m.recentlyAdded {
-		if m.clock().Sub(at) >= killDissolveDuration {
+		if m.clock().Sub(at) >= m.dissolveDuration() {
 			delete(m.recentlyAdded, key)
 		}
 	}
@@ -546,6 +552,20 @@ func (m *Model) setEphemeralStatus(text string, dur time.Duration) {
 	m.statusExpiry = m.clock().Add(dur)
 }
 
+// dissolveDuration is killDissolveDuration, or 0 when config.Animations is
+// off — every fade/highlight timing in this file reads through this
+// rather than the constant directly, so disabling animations collapses
+// them all to instant with no new math needed in internal/tui/anim (its
+// FadeOutStage/FadeOutComplete already have a well-defined, tested
+// degenerate case at total==0). ephemeralStatusDuration is deliberately
+// NOT affected — that's message-readability timing, not decoration.
+func (m Model) dissolveDuration() time.Duration {
+	if !m.cfg.Animations {
+		return 0
+	}
+	return killDissolveDuration
+}
+
 // computeNormalStatus implements PRD §5.3's "talking status line": the
 // header text progresses "scanning sockets" -> "resolving N processes" ->
 // "N services listening" as time passes since the last scan, rather than
@@ -560,18 +580,23 @@ func (m Model) computeNormalStatus() string {
 		return fmt.Sprintf("scanning sockets %c", anim.SpinnerFrame(m.clock().Sub(m.scanStart)))
 	}
 	elapsed := m.clock().Sub(m.revealStart)
-	if elapsed < anim.RevealCap {
+	if m.cfg.Animations && elapsed < anim.RevealCap {
 		return fmt.Sprintf("resolving %d processes %c", len(m.services), anim.SpinnerFrame(elapsed))
 	}
 	return fmt.Sprintf("%d services listening", len(m.services))
 }
 
 func (m *Model) applyFilter() {
+	base := m.services
+	if !m.showAll {
+		base = scan.FilterDisplay(base, m.cfg.Display.HideSystemProcesses, m.cfg.Display.HidePrivilegedPorts)
+	}
+
 	query := strings.TrimSpace(m.filterInput.Value())
 	if query == "" {
-		m.filtered = m.services
+		m.filtered = base
 	} else {
-		m.filtered = filterServices(m.services, query)
+		m.filtered = filterServices(base, query)
 	}
 	if m.cursor >= len(m.filtered) {
 		m.cursor = len(m.filtered) - 1
@@ -661,7 +686,7 @@ func (m Model) handleKillResult(msg killResultMsg) (tea.Model, tea.Cmd) {
 	case msg.result.Status == kill.StatusKilled || msg.result.Status == kill.StatusAlreadyDead:
 		m.mode = modeNormal
 		m.fadingOut = append(m.fadingOut, fadeEntry{service: msg.target, startedAt: m.clock(), triggersRescan: true})
-		m.setEphemeralStatus(fmt.Sprintf("terminated %s on :%d", msg.target.Process, msg.target.Port), killDissolveDuration)
+		m.setEphemeralStatus(fmt.Sprintf("terminated %s on :%d", msg.target.Process, msg.target.Port), m.dissolveDuration())
 		return m, nil
 
 	case msg.result.Status == kill.StatusNeedsEscalation && !msg.force:
@@ -704,7 +729,7 @@ func (m Model) handleBulkKillResult(msg bulkKillMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case failedCount == 0:
-		m.setEphemeralStatus(fmt.Sprintf("terminated %d services", killedCount), killDissolveDuration)
+		m.setEphemeralStatus(fmt.Sprintf("terminated %d services", killedCount), m.dissolveDuration())
 	case killedCount == 0:
 		m.setEphemeralStatus(fmt.Sprintf("failed to terminate %d services", failedCount), ephemeralStatusDuration)
 	default:

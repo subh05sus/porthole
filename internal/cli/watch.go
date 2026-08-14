@@ -18,6 +18,7 @@ func newWatchCmd(app *App) *cobra.Command {
 	var (
 		interval   time.Duration
 		notifyFlag bool
+		all        bool
 	)
 
 	cmd := &cobra.Command{
@@ -30,11 +31,13 @@ func newWatchCmd(app *App) *cobra.Command {
 			if notifyFlag {
 				notifier = notify.NewDefaultNotifier()
 			}
-			return runWatch(ctx, app, interval, nil, notifier)
+			resolved := resolveInterval(cmd.Flags().Changed("interval"), interval, time.Duration(app.Config.Watch.Interval))
+			return runWatch(ctx, app, resolved, nil, notifier, all)
 		},
 	}
-	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "how often to rescan")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "how often to rescan (overrides watch.interval in ~/.porthole.yaml)")
 	cmd.Flags().BoolVar(&notifyFlag, "notify", false, "send a desktop notification when a new service starts listening")
+	cmd.Flags().BoolVar(&all, "all", false, "show every service, ignoring display.hide_* settings in ~/.porthole.yaml")
 	return cmd
 }
 
@@ -44,9 +47,19 @@ func newWatchCmd(app *App) *cobra.Command {
 // than always going through the real timer) so tests can drive multiple
 // scans deterministically instead of waiting on wall-clock time. notifier
 // fires only for newly-appeared services, never removals — matching the
-// plan's "notify when a watched port appears."
-func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-chan time.Time, notifier notify.Notifier) error {
+// plan's "notify when a watched port appears." Unless all is true, every
+// printed service, addition, and removal passes through the same
+// display-only filter list uses — including a hidden newly-appeared
+// service getting neither a "+" line nor a notification.
+func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-chan time.Time, notifier notify.Notifier, all bool) error {
 	events := scan.Watch(ctx, app.Lister, interval, ticks)
+
+	filter := func(services []scan.Service) []scan.Service {
+		if all {
+			return services
+		}
+		return scan.FilterDisplay(services, app.Config.Display.HideSystemProcesses, app.Config.Display.HidePrivilegedPorts)
+	}
 
 	first := true
 	for ev := range events {
@@ -55,15 +68,15 @@ func runWatch(ctx context.Context, app *App, interval time.Duration, ticks <-cha
 			continue
 		}
 		if first {
-			_ = output.Table(app.Stdout, ev.Services)
+			_ = output.Table(app.Stdout, filter(ev.Services))
 			first = false
 			continue
 		}
-		for _, s := range ev.Diff.Added {
+		for _, s := range filter(ev.Diff.Added) {
 			fmt.Fprintf(app.Stdout, "+ %s on :%d (pid %d)\n", watchDisplayName(s), s.Port, s.PID)
 			notifier.Notify("porthole: new service", fmt.Sprintf("%s started listening on :%d", watchDisplayName(s), s.Port))
 		}
-		for _, s := range ev.Diff.Removed {
+		for _, s := range filter(ev.Diff.Removed) {
 			fmt.Fprintf(app.Stdout, "- %s on :%d (pid %d)\n", watchDisplayName(s), s.Port, s.PID)
 		}
 	}

@@ -31,7 +31,7 @@ func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{Animations: true}, theme.New("auto", true))
 }
 
 // runCmd executes a tea.Cmd synchronously and feeds its resulting Msg back
@@ -106,8 +106,158 @@ func TestInitTriggersScanAndPopulatesServices(t *testing.T) {
 	}
 }
 
+func TestAnimationsOffSkipsResolvingStatusMessage(t *testing.T) {
+	m := newProtectedTestModel([]scan.Service{{Port: 3000, Process: "node", Owned: true}}, nil, config.Config{Animations: false})
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+
+	m = runCmd(t, m, m.Init())
+
+	// Even immediately after the scan, with animations off the status
+	// jumps straight to the final steady-state message — no "resolving"
+	// interim phase.
+	if strings.Contains(m.status, "resolving") {
+		t.Fatalf("expected no resolving-phase message with animations off, got %q", m.status)
+	}
+	if m.status != "1 services listening" {
+		t.Fatalf("got status %q, want the final steady-state message immediately", m.status)
+	}
+}
+
+func TestAnimationsOffRendersAllRowsImmediately(t *testing.T) {
+	services := []scan.Service{
+		{Port: 3000, Process: "node", Owned: true},
+		{Port: 3001, Process: "node", Owned: true},
+		{Port: 3002, Process: "node", Owned: true},
+	}
+	m := newProtectedTestModel(services, nil, config.Config{Animations: false})
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+
+	m = runCmd(t, m, m.Init())
+
+	// No time advance at all — with animations off, every row still
+	// renders on the very first frame instead of staggering in.
+	view := m.View()
+	for _, port := range []string{"3000", "3001", "3002"} {
+		if !strings.Contains(view, port) {
+			t.Fatalf("expected port %s visible immediately with animations off, got:\n%s", port, view)
+		}
+	}
+}
+
+func TestAnimationsOffCollapsesFadeOutImmediately(t *testing.T) {
+	killer := &killtest.FakeKiller{ExecuteResult: kill.Result{Status: kill.StatusKilled}}
+	m := newProtectedTestModel([]scan.Service{{Port: 3000, Process: "node", Owned: true}}, killer, config.Config{Animations: false})
+	m = runCmd(t, m, m.Init())
+	fc := &fakeClock{now: time.Now()}
+	m.clock = fc.Now
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	m2, cmd := m.Update(key("y"))
+	m = m2.(Model)
+	m = runCmd(t, m, cmd)
+
+	if len(m.fadingOut) != 1 {
+		t.Fatalf("expected the killed row to start fading, got %+v", m.fadingOut)
+	}
+
+	// With animations off, dissolveDuration() is 0 — the very next tick
+	// (no time advance needed) must complete the fade instead of waiting
+	// ~400ms.
+	m2, _ = m.Update(tickMsg(fc.Now()))
+	m = m2.(Model)
+	if len(m.fadingOut) != 0 {
+		t.Fatalf("expected the fade to complete on the immediate next tick with animations off, got %+v", m.fadingOut)
+	}
+}
+
+func TestDisplayFilterHidesUnownedRowInTUI(t *testing.T) {
+	services := []scan.Service{
+		{Port: 3000, Process: "node", Owned: true},
+		{Port: 22, Process: "sshd", Owned: false},
+	}
+	cfg := config.Config{Animations: true, Display: config.Display{HideSystemProcesses: true}}
+	m := newProtectedTestModel(services, nil, cfg)
+	m = runCmd(t, m, m.Init())
+
+	view := m.View()
+	if strings.Contains(view, "sshd") {
+		t.Fatalf("expected the unowned row hidden, got:\n%s", view)
+	}
+	if !strings.Contains(view, "node") {
+		t.Fatalf("expected the owned row still visible, got:\n%s", view)
+	}
+}
+
+func TestDisplayFilterHidesPrivilegedPortInTUI(t *testing.T) {
+	services := []scan.Service{
+		{Port: 3000, Process: "node", Owned: true},
+		{Port: 80, Process: "nginx", Owned: true},
+	}
+	cfg := config.Config{Animations: true, Display: config.Display{HidePrivilegedPorts: true}}
+	m := newProtectedTestModel(services, nil, cfg)
+	m = runCmd(t, m, m.Init())
+
+	view := m.View()
+	if strings.Contains(view, "nginx") {
+		t.Fatalf("expected the privileged-port row hidden, got:\n%s", view)
+	}
+}
+
+func TestToggleShowAllRevealsHiddenRows(t *testing.T) {
+	services := []scan.Service{
+		{Port: 3000, Process: "node", Owned: true},
+		{Port: 22, Process: "sshd", Owned: false},
+	}
+	cfg := config.Config{Animations: true, Display: config.Display{HideSystemProcesses: true}}
+	m := newProtectedTestModel(services, nil, cfg)
+	m = runCmd(t, m, m.Init())
+
+	if strings.Contains(m.View(), "sshd") {
+		t.Fatalf("expected sshd hidden before toggling 'a'")
+	}
+
+	m2, _ := m.Update(key("a"))
+	m = m2.(Model)
+	if !strings.Contains(m.View(), "sshd") {
+		t.Fatalf("expected sshd visible after toggling 'a' on, got:\n%s", m.View())
+	}
+
+	m2, _ = m.Update(key("a"))
+	m = m2.(Model)
+	if strings.Contains(m.View(), "sshd") {
+		t.Fatalf("expected sshd hidden again after toggling 'a' off, got:\n%s", m.View())
+	}
+}
+
+func TestKillUnreachableForHiddenRowViaTUI(t *testing.T) {
+	// A display-hidden row is simply unselectable — the cursor never
+	// reaches it — the same as today's precedent where an unowned row
+	// already refuses a kill attempt, just now also invisible.
+	killer := &killtest.FakeKiller{}
+	services := []scan.Service{{Port: 22, Process: "sshd", Owned: false}}
+	cfg := config.Config{Animations: true, Display: config.Display{HideSystemProcesses: true}}
+	m := newProtectedTestModel(services, killer, cfg)
+	m = runCmd(t, m, m.Init())
+
+	if len(m.filtered) != 0 {
+		t.Fatalf("expected zero selectable rows with the only service hidden, got %+v", m.filtered)
+	}
+
+	m2, _ := m.Update(key("k"))
+	m = m2.(Model)
+	if m.mode != modeNormal {
+		t.Fatalf("expected no kill confirmation to start with nothing selectable, got mode %v", m.mode)
+	}
+	if len(killer.ExecuteCalls) != 0 {
+		t.Fatalf("expected no kill attempt, got %d calls", len(killer.ExecuteCalls))
+	}
+}
+
 func TestScanErrorSetsStatus(t *testing.T) {
-	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	if m.scanErr == nil {
@@ -679,7 +829,7 @@ func TestEnterQueriesFullSocketListWhenQuerierAvailable(t *testing.T) {
 			},
 		},
 	}
-	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -707,7 +857,7 @@ func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
 		FakeLister: scantest.FakeLister{Services: services},
 		QueryErr:   errFake,
 	}
-	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -725,7 +875,7 @@ func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
 func TestEnterQueriesResourceStatsWhenQuerierAvailable(t *testing.T) {
 	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
 	lookup := &proctest.FakeQueryingLookup{Resource: proc.ResourceStats{CPUPercent: 12.5, RSSBytes: 50 * 1024 * 1024}}
-	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -747,7 +897,7 @@ func TestEnterQueriesResourceStatsWhenQuerierAvailable(t *testing.T) {
 func TestEnterShowsUnavailableOnResourceQueryError(t *testing.T) {
 	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
 	lookup := &proctest.FakeQueryingLookup{ResourceErr: errFake}
-	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -807,7 +957,7 @@ func TestSudoBannerForEmptyServicesIsEmpty(t *testing.T) {
 func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
 	killer := &killtest.FakeKiller{}
 	lister := &scantest.FakeLister{Services: []scan.Service{{Port: 1, ResolveErr: errFake}, {Port: 2, ResolveErr: errFake}}}
-	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
 	m = runCmd(t, m, m.Init())
 
 	if m.sudoBanner == "" {
@@ -835,7 +985,7 @@ func newRestartTestModel(services []scan.Service, killer *killtest.FakeKiller, l
 	if spawner == nil {
 		spawner = &restarttest.FakeSpawner{}
 	}
-	return New(lister, killer, lookup, spawner, config.Config{}, theme.New(true))
+	return New(lister, killer, lookup, spawner, config.Config{}, theme.New("auto", true))
 }
 
 func TestRestartConfirmFlowSuccess(t *testing.T) {
@@ -957,7 +1107,7 @@ func newProtectedTestModel(services []scan.Service, killer *killtest.FakeKiller,
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, cfg, theme.New(true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, cfg, theme.New("auto", true))
 }
 
 func typeString(t *testing.T, m Model, s string) Model {

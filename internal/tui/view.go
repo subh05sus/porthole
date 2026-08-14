@@ -143,8 +143,10 @@ func (m Model) renderTable() string {
 		// all at once. Since Lister.List isn't actually streaming, this
 		// simulates the cascade against the already-resolved list — a row
 		// not yet due simply isn't drawn this frame, so the list visibly
-		// grows over ~400ms after each scan.
-		if !anim.Revealed(i, revealElapsed) {
+		// grows over ~400ms after each scan. Skipped entirely when
+		// animations are off (config.Animations=false): every row in the
+		// visible window renders on the first frame instead.
+		if m.cfg.Animations && !anim.Revealed(i, revealElapsed) {
 			break
 		}
 		if rendered > 0 {
@@ -229,7 +231,11 @@ func (m Model) renderRow(s scan.Service, selected bool) string {
 		// before dissolving. A watch-mode removal (the process just exited
 		// on its own) has nothing to celebrate, so it just dims throughout.
 		if f.triggersRescan {
-			stage := anim.FadeOutStage(m.clock().Sub(f.startedAt), killDissolveDuration)
+			// At dissolveDuration()==0 (animations off), FadeStages'
+			// midpoint condition below is never true — the brief green
+			// "terminated" flash never renders, an accepted trade-off of
+			// instant mode, not an oversight.
+			stage := anim.FadeOutStage(m.clock().Sub(f.startedAt), m.dissolveDuration())
 			if stage < anim.FadeStages/2 {
 				return m.th.Success.Render(row)
 			}
@@ -289,7 +295,7 @@ func (m Model) hintBar() string {
 	case modeKilling, modeRestarting:
 		return "working…"
 	default:
-		hints := "↑↓ nav · space select · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
+		hints := "↑↓ nav · space select · k kill · K force · / filter · a all · w watch · r refresh · ? help · q quit"
 		if pos := m.scrollPosition(); pos != "" {
 			hints = pos + " · " + hints
 		}

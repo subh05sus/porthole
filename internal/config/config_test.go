@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -29,6 +30,24 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if len(cfg.Protected) != 0 {
 		t.Errorf("expected no protected ports by default, got %+v", cfg.Protected)
 	}
+	if cfg.Theme != "auto" {
+		t.Errorf("got Theme %q, want auto", cfg.Theme)
+	}
+	if cfg.Kill.DevPortRange != "3000-9999" {
+		t.Errorf("got Kill.DevPortRange %q, want 3000-9999", cfg.Kill.DevPortRange)
+	}
+	if time.Duration(cfg.Kill.EscalationTimeout) != 2*time.Second {
+		t.Errorf("got Kill.EscalationTimeout %s, want 2s", cfg.Kill.EscalationTimeout)
+	}
+	if time.Duration(cfg.Watch.Interval) != 2*time.Second {
+		t.Errorf("got Watch.Interval %s, want 2s", cfg.Watch.Interval)
+	}
+	if time.Duration(cfg.AutoKill.Interval) != 5*time.Second {
+		t.Errorf("got AutoKill.Interval %s, want 5s", cfg.AutoKill.Interval)
+	}
+	if cfg.Display != (Display{}) {
+		t.Errorf("expected Display to be zero-value (show everything) by default, got %+v", cfg.Display)
+	}
 }
 
 func TestLoadMixedProtectedPortForms(t *testing.T) {
@@ -39,7 +58,7 @@ protected:
   - port: 3306
     reason: "prod tunnel, do not touch"
 
-theme: minimal
+theme: plain
 animations: true
 default_signal: SIGTERM
 `)
@@ -60,8 +79,8 @@ default_signal: SIGTERM
 	if cfg.Protected[2].Port != 3306 || cfg.Protected[2].Reason != "prod tunnel, do not touch" {
 		t.Errorf("got %+v, want port 3306 with a reason", cfg.Protected[2])
 	}
-	if cfg.Theme != "minimal" {
-		t.Errorf("got Theme %q, want minimal", cfg.Theme)
+	if cfg.Theme != "plain" {
+		t.Errorf("got Theme %q, want plain", cfg.Theme)
 	}
 }
 
@@ -95,6 +114,129 @@ func TestLoadInvalidProtectedEntryReturnsError(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatalf("expected an error for a protected entry that's neither a scalar nor a mapping")
+	}
+}
+
+func TestLoadKillSectionOverridesDefaults(t *testing.T) {
+	path := writeConfig(t, "kill:\n  dev_port_range: \"4000-4999\"\n  escalation_timeout: 5s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Kill.DevPortRange != "4000-4999" {
+		t.Errorf("got Kill.DevPortRange %q, want 4000-4999", cfg.Kill.DevPortRange)
+	}
+	if time.Duration(cfg.Kill.EscalationTimeout) != 5*time.Second {
+		t.Errorf("got Kill.EscalationTimeout %s, want 5s", cfg.Kill.EscalationTimeout)
+	}
+}
+
+func TestLoadInvalidDevPortRangeReturnsError(t *testing.T) {
+	path := writeConfig(t, "kill:\n  dev_port_range: \"abc\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for an invalid dev_port_range")
+	}
+}
+
+func TestLoadNegativeEscalationTimeoutReturnsError(t *testing.T) {
+	// Syntactically valid duration, semantically invalid (must be > 0) —
+	// caught by validate(), not by Duration's own UnmarshalYAML.
+	path := writeConfig(t, "kill:\n  escalation_timeout: \"-5s\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for a negative escalation_timeout")
+	}
+}
+
+func TestLoadInvalidDurationStringReturnsError(t *testing.T) {
+	// Syntactically invalid duration — caught during yaml.Unmarshal by
+	// Duration.UnmarshalYAML itself, a distinct failure stage from
+	// validate()'s semantic checks (proven as a separate test case).
+	path := writeConfig(t, "watch:\n  interval: \"banana\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for a syntactically invalid duration")
+	}
+}
+
+func TestLoadWatchIntervalOverride(t *testing.T) {
+	path := writeConfig(t, "watch:\n  interval: 10s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if time.Duration(cfg.Watch.Interval) != 10*time.Second {
+		t.Errorf("got Watch.Interval %s, want 10s", cfg.Watch.Interval)
+	}
+}
+
+func TestLoadZeroWatchIntervalReturnsError(t *testing.T) {
+	path := writeConfig(t, "watch:\n  interval: \"0s\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for a zero watch.interval")
+	}
+}
+
+func TestLoadAutoKillIntervalOverride(t *testing.T) {
+	path := writeConfig(t, "auto_kill:\n  interval: 30s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if time.Duration(cfg.AutoKill.Interval) != 30*time.Second {
+		t.Errorf("got AutoKill.Interval %s, want 30s", cfg.AutoKill.Interval)
+	}
+}
+
+func TestLoadZeroAutoKillIntervalReturnsError(t *testing.T) {
+	path := writeConfig(t, "auto_kill:\n  interval: \"0s\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for a zero auto_kill.interval")
+	}
+}
+
+func TestLoadThemeAcceptsColorAndPlain(t *testing.T) {
+	for _, theme := range []string{"auto", "color", "plain"} {
+		path := writeConfig(t, "theme: "+theme+"\n")
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("theme %q: unexpected error: %v", theme, err)
+		}
+		if cfg.Theme != theme {
+			t.Errorf("theme %q: got %q", theme, cfg.Theme)
+		}
+	}
+}
+
+func TestLoadThemeRejectsInvalidValue(t *testing.T) {
+	path := writeConfig(t, "theme: minimal\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected an error for an invalid theme value")
+	}
+}
+
+func TestLoadDisplaySectionHidesWhenSet(t *testing.T) {
+	path := writeConfig(t, "display:\n  hide_system_processes: true\n  hide_privileged_ports: true\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Display.HideSystemProcesses || !cfg.Display.HidePrivilegedPorts {
+		t.Errorf("got %+v, want both hide_* true", cfg.Display)
 	}
 }
 

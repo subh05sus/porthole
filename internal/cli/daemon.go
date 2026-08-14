@@ -28,11 +28,12 @@ func newDaemonCmd(app *App) *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return runDaemon(ctx, app, live, interval, nil)
+			resolved := resolveInterval(cmd.Flags().Changed("interval"), interval, time.Duration(app.Config.AutoKill.Interval))
+			return runDaemon(ctx, app, live, resolved, nil)
 		},
 	}
 	cmd.Flags().BoolVar(&live, "live", false, "actually kill matches instead of dry-run/notify-only (default: dry-run)")
-	cmd.Flags().DurationVar(&interval, "interval", 5*time.Second, "how often to poll")
+	cmd.Flags().DurationVar(&interval, "interval", 5*time.Second, "how often to poll (overrides auto_kill.interval in ~/.porthole.yaml)")
 	return cmd
 }
 

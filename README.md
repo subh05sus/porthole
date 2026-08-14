@@ -65,9 +65,9 @@ porthole watch             # headless live tail, no TUI
 | Command | What it does |
 |---|---|
 | `porthole` | Launch the interactive TUI |
-| `porthole list [--json\|--oneline] [--port N] [--project NAME] [--since 5m] [--containers]` | List listening services |
+| `porthole list [--json\|--oneline] [--port N] [--project NAME] [--since 5m] [--containers] [--all]` | List listening services |
 | `porthole kill <ports...> [--force] [--dry-run] [--yes] [--project NAME] [--dev]` | Kill whatever's listening on one or more ports |
-| `porthole watch [--interval 2s] [--notify]` | Headless live tail — prints what changed, no TUI |
+| `porthole watch [--interval 2s] [--notify] [--all]` | Headless live tail — prints what changed, no TUI |
 | `porthole restart <port>` | Kill a process, then respawn it with the same command/cwd/env |
 | `porthole doctor` | Diagnose common permission/environment issues |
 | `porthole history` | Show recent kills (who, when, what happened) |
@@ -89,6 +89,7 @@ Every command supports `--help` for the full flag list.
 | `K` | Force kill |
 | `R` | Restart |
 | `/` | Filter by port, process, or project |
+| `a` | Toggle showing rows hidden by `display.hide_*` |
 | `w` | Toggle watch mode |
 | `r` | Refresh |
 | `?` | Help |
@@ -104,14 +105,31 @@ protected:
   - port: 3306
     reason: "prod tunnel, do not touch"
 
+theme: auto                # "auto" | "color" | "plain"
+animations: true           # staggered reveal, fade-out on kill, spinner
+
+display:
+  hide_system_processes: false   # hide rows you don't own (can't kill anyway)
+  hide_privileged_ports: false   # hide ports < 1024, regardless of ownership
+
+kill:
+  dev_port_range: "3000-9999"    # the range --dev sweeps
+  escalation_timeout: 2s         # how long to wait after SIGTERM before SIGKILL is eligible
+
+watch:
+  interval: 2s
+
 auto_kill:
   enabled: false          # opt-in, see below
+  interval: 5s
   allow:
     - port: 3000
       process: node
 ```
 
 **Protected ports** need a typed confirmation (the exact port number) instead of a plain y/n — and `--yes` does not bypass it, in either the CLI or the TUI.
+
+**Display filters** (`hide_system_processes`/`hide_privileged_ports`) only affect what's *shown* in `list`/`watch`/the TUI — they never change what `porthole kill <port>` can target, and `--all` (CLI) or `a` (TUI) shows everything for one run/session regardless of config. Both are relative to the current invocation's privilege level: running elevated reveals more rows, not fewer, since more of them become yours.
 
 ### Auto-kill daemon (opt-in)
 

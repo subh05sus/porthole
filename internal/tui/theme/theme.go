@@ -24,12 +24,19 @@ type Theme struct {
 	Plain    bool
 }
 
-// New resolves a Theme for the current environment. NO_COLOR (any value,
-// per the convention at no-color.org) forces the plain, zero-animation
-// theme; forcePlain lets callers (e.g. a failed Windows VT100 enable) apply
-// the same degradation for other reasons.
-func New(forcePlain bool) Theme {
-	if forcePlain || noColorSet() {
+// New resolves a Theme for the current environment and the user's
+// config.Theme preference ("auto" | "color" | "plain"). Hard environment
+// constraints always win over that preference: NO_COLOR (any value, per
+// the convention at no-color.org) and forcePlain (e.g. a failed Windows
+// VT100 enable) both force the plain theme regardless of mode — a config
+// preference must never force color onto a terminal that genuinely can't
+// render it. mode == "plain" can force plain even on a capable terminal,
+// respecting an explicit preference. "auto" and "color" are functionally
+// identical today — this package has only one color theme, no light/dark
+// variants to choose between — "auto" exists for schema clarity ("let
+// porthole decide") rather than a real second option.
+func New(mode string, forcePlain bool) Theme {
+	if mode == "plain" || forcePlain || noColorSet() {
 		return plainTheme()
 	}
 	return colorTheme()

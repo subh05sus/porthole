@@ -23,7 +23,7 @@ func runTUI(app *App) error {
 	}
 
 	forcePlain := !tui.EnableVirtualTerminal()
-	th := theme.New(forcePlain)
+	th := theme.New(app.Config.Theme, forcePlain)
 	model := tui.New(app.Lister, app.Killer, app.Lookup, app.Spawner, app.Config, th)
 
 	// WithAltScreen is what makes the fixed-height table actually fixed:

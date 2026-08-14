@@ -77,6 +77,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "scanning sockets"
 		return m, m.scanCmd()
 
+	case "a":
+		m.showAll = !m.showAll
+		m.applyFilter()
+		return m, nil
+
 	case "/":
 		m.mode = modeFilter
 		m.filterInput.Focus()

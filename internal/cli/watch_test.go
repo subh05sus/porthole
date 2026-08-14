@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/notify"
 	"github.com/subh05sus/porthole/internal/scan"
 )
@@ -52,7 +53,7 @@ func TestRunWatchPrintsInitialTableThenDiffsOnly(t *testing.T) {
 
 	spy := &spyNotifier{}
 	done := make(chan error, 1)
-	go func() { done <- runWatch(ctx, app, time.Second, ticks, spy) }()
+	go func() { done <- runWatch(ctx, app, time.Second, ticks, spy, false) }()
 
 	// Give the initial scan a moment to print, then trigger a second scan
 	// and cancel once its output should have landed.
@@ -88,6 +89,63 @@ func TestRunWatchPrintsInitialTableThenDiffsOnly(t *testing.T) {
 	}
 }
 
+func TestRunWatchHidesUnownedWhenConfigured(t *testing.T) {
+	lister := &sequencedLister{results: [][]scan.Service{
+		{{Port: 3000, PID: 1, Process: "node", Owned: true}},
+		{{Port: 3000, PID: 1, Process: "node", Owned: true}, {Port: 22, PID: 2, Process: "sshd", Owned: false}},
+	}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: lister,
+		Config: config.Config{Display: config.Display{HideSystemProcesses: true}},
+		Stdin:  strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time)
+	spy := &spyNotifier{}
+	done := make(chan error, 1)
+	go func() { done <- runWatch(ctx, app, time.Second, ticks, spy, false) }()
+
+	time.Sleep(50 * time.Millisecond)
+	ticks <- time.Now()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	out := stdout.String()
+	if strings.Contains(out, "sshd") {
+		t.Fatalf("expected the unowned added service hidden from output, got %q", out)
+	}
+	if len(spy.calls) != 0 {
+		t.Fatalf("expected no notification for a hidden added service, got %+v", spy.calls)
+	}
+}
+
+func TestRunWatchAllFlagShowsHiddenRows(t *testing.T) {
+	lister := &sequencedLister{results: [][]scan.Service{
+		{{Port: 22, PID: 1, Process: "sshd", Owned: false}},
+	}}
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Lister: lister,
+		Config: config.Config{Display: config.Display{HideSystemProcesses: true}},
+		Stdin:  strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runWatch(ctx, app, time.Second, make(chan time.Time), notify.NoOp{}, true) }()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if !strings.Contains(stdout.String(), "sshd") {
+		t.Fatalf("expected --all (true) to show the row hide_system_processes would hide, got %q", stdout.String())
+	}
+}
+
 func TestRunWatchStopsOnContextCancellation(t *testing.T) {
 	lister := &sequencedLister{results: [][]scan.Service{{}}}
 	var stdout, stderr bytes.Buffer
@@ -95,7 +153,7 @@ func TestRunWatchStopsOnContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runWatch(ctx, app, time.Second, make(chan time.Time), notify.NoOp{}) }()
+	go func() { done <- runWatch(ctx, app, time.Second, make(chan time.Time), notify.NoOp{}, false) }()
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()
