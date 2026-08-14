@@ -21,10 +21,14 @@ type windowsManager struct {
 }
 
 // NewDefaultManager returns the Windows firewall manager, shelling out to
-// netsh advfirewall — the same tool `netsh advfirewall firewall show rule`
-// already verified live against this machine's real rule set. Applying or
-// removing a rule requires Administrator elevation (netsh's own
-// requirement, not porthole's); List does not.
+// netsh advfirewall. [tested, live] — Apply/List/RemoveAll all verified
+// against this real machine's Windows Firewall in an elevated terminal
+// (Apply/Remove require Administrator elevation; List does not): applied
+// a block rule on a disposable unused port, confirmed it via both
+// `porthole firewall list` and netsh's own `show rule` directly (exact
+// field match), then ran `firewall clean` and confirmed zero rules
+// remained — including a final direct netsh check outside porthole
+// entirely, confirming no trace was left behind.
 func NewDefaultManager() Manager {
 	return windowsManager{runNetsh: execNetsh}
 }
