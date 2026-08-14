@@ -73,6 +73,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newRestartCmd(app))
 	root.AddCommand(newDoctorCmd(app))
 	root.AddCommand(newHistoryCmd(app))
+	root.AddCommand(newServeCmd(app))
 
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return runTUI(app)
