@@ -26,7 +26,14 @@ func runTUI(app *App) error {
 	th := theme.New(forcePlain)
 	model := tui.New(app.Lister, app.Killer, app.Lookup, app.Spawner, app.Config, th)
 
-	p := tea.NewProgram(model, tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout))
+	// WithAltScreen is what makes the fixed-height table actually fixed:
+	// without it bubbletea draws inline, starting from wherever the shell
+	// prompt's cursor already sat, so the reported terminal height was
+	// never fully available and the view overran it anyway (worse, each
+	// 60ms redraw tick compounded the misalignment into garbled, duplicated
+	// rows). The alt screen is a dedicated blank buffer sized exactly to
+	// the terminal, restored to the normal buffer on exit.
+	p := tea.NewProgram(model, tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
