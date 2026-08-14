@@ -45,6 +45,7 @@ const (
 	modeConfirmRestart
 	modeRestarting
 	modeConfirmProtected
+	modeSettings
 )
 
 // watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.

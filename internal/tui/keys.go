@@ -21,6 +21,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmEscalateKey(msg)
 	case modeHelp:
 		return m.handleHelpKey(msg)
+	case modeSettings:
+		return m.handleSettingsKey(msg)
 	case modeDetail:
 		return m.handleDetailKey(msg)
 	case modeConfirmRestart:
@@ -89,6 +91,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		m.mode = modeHelp
+		return m, nil
+
+	case "S":
+		m.mode = modeSettings
 		return m, nil
 
 	case " ":
@@ -416,6 +422,11 @@ func (m Model) handleConfirmEscalateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	return m, nil
+}
+
+func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeNormal
 	return m, nil
 }

@@ -17,6 +17,7 @@ var helpEntries = []struct {
 	{"a", "toggle showing rows hidden by display.hide_* in ~/.porthole.yaml"},
 	{"w", "toggle watch mode (live-updating list)"},
 	{"r", "manual refresh"},
+	{"S", "view current settings (~/.porthole.yaml)"},
 	{"?", "toggle this help"},
 	{"q / esc", "quit"},
 }

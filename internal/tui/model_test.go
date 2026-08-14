@@ -467,6 +467,54 @@ func TestHelpTogglesAndAnyKeyCloses(t *testing.T) {
 	}
 }
 
+func TestSettingsTogglesAndAnyKeyCloses(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("S"))
+	m = m2.(Model)
+	if m.mode != modeSettings {
+		t.Fatalf("expected modeSettings, got %v", m.mode)
+	}
+
+	m2, _ = m.Update(key("x"))
+	m = m2.(Model)
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after closing settings, got %v", m.mode)
+	}
+}
+
+func TestSettingsViewShowsLoadedConfigValues(t *testing.T) {
+	cfg := config.Config{
+		Theme:      "plain",
+		Animations: false,
+		Display:    config.Display{HideSystemProcesses: true, HidePrivilegedPorts: true},
+		Kill:       config.Kill{DevPortRange: "9000-9010", EscalationTimeout: config.Duration(7 * time.Second)},
+		Watch:      config.Watch{Interval: config.Duration(3 * time.Second)},
+		AutoKill: config.AutoKill{
+			Enabled:  true,
+			Interval: config.Duration(10 * time.Second),
+			Allow:    []config.AutoKillEntry{{Port: 3000, Process: "node"}},
+		},
+		Protected: []config.ProtectedPort{{Port: 5432, Reason: "prod tunnel"}},
+	}
+	m := newProtectedTestModel(nil, nil, cfg)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("S"))
+	m = m2.(Model)
+	view := m.View()
+
+	for _, want := range []string{
+		"plain", "false", "true", "9000-9010", "7s", "3s", "10s",
+		"3000", "node", "5432", "prod tunnel",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("expected settings view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
 func TestQuitSetsQuittingAndReturnsQuitCmd(t *testing.T) {
 	m := newTestModel(nil, nil)
 	m = runCmd(t, m, m.Init())
