@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/subh05sus/porthole/internal/config"
+	"github.com/subh05sus/porthole/internal/firewall"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/restart"
@@ -45,10 +46,11 @@ func exitErr(code int, err error) *ExitError { return &ExitError{Code: code, Err
 type App struct {
 	Lister      scan.Lister
 	Killer      kill.Killer
-	Lookup      proc.Lookup     // used by restart to capture cmdline/cwd/env
-	Spawner     restart.Spawner // used by restart to respawn
-	Config      config.Config   // protected ports, theme/animation preferences
-	HistoryPath string          // for `porthole history`; empty disables it
+	Lookup      proc.Lookup      // used by restart to capture cmdline/cwd/env
+	Spawner     restart.Spawner  // used by restart to respawn
+	Config      config.Config    // protected ports, theme/animation preferences
+	HistoryPath string           // for `porthole history`; empty disables it
+	Firewall    firewall.Manager // for `porthole firewall`
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
@@ -74,6 +76,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newDoctorCmd(app))
 	root.AddCommand(newHistoryCmd(app))
 	root.AddCommand(newServeCmd(app))
+	root.AddCommand(newFirewallCmd(app))
 
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return runTUI(app)

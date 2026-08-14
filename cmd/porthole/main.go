@@ -8,6 +8,7 @@ import (
 	"github.com/subh05sus/porthole/internal/cli"
 	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/container"
+	"github.com/subh05sus/porthole/internal/firewall"
 	"github.com/subh05sus/porthole/internal/history"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/proc"
@@ -43,6 +44,7 @@ func main() {
 		Spawner:     restart.NewDefaultSpawner(),
 		Config:      cfg,
 		HistoryPath: historyPath,
+		Firewall:    firewall.NewDefaultManager(),
 		Stdin:       os.Stdin,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,

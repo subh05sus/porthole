@@ -1,0 +1,56 @@
+Rule Name:                            HNS Container Networking - DNS (UDP-In) - 790E58B4-7939-4434-9358-89AE7DDBE87F - 0
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Domain,Private,Public
+Grouping:
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             UDP
+LocalPort:                            53
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Allow
+
+Rule Name:                            ms-resource:AppTitle
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Domain,Private,Public
+Grouping:                             {78E1CD88-49E3-476E-B926-580E596AD309}
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            Any
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Allow
+
+Rule Name:                            porthole-in-block-47823-tcp
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Domain,Private,Public
+Grouping:
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            47823
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Block
+
+Rule Name:                            porthole-out-allow-9191-tcp
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            Out
+Profiles:                             Domain,Private,Public
+Grouping:
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            9191
+RemotePort:                           Any
+Edge traversal:                       No
+Action:                               Allow
+
