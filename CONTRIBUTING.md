@@ -13,23 +13,9 @@ go test ./...
 
 Requires Go 1.26+. No cgo, no external system dependencies.
 
-## Project structure
+## Architecture
 
-- `cmd/porthole/` — the entrypoint; wires real dependencies together, contains no logic of its own.
-- `internal/scan/` — discovers listening sockets. Per-OS files (`scan_linux.go`, `scan_darwin.go`, `scan_windows.go`) implement a small `Lister` interface; `scan/procfmt` and `scan/lsoffmt` are pure, build-tag-free parsers for `/proc` and `lsof` output, testable on any host OS.
-- `internal/kill/` — the kill ladder (verify → signal → poll → escalate), driven by a small `Signaler` interface. Fully portable and unit-tested against a fake Signaler — this is the one file where getting it wrong has real consequences, so PRs here get extra scrutiny.
-- `internal/proc/`, `internal/container/`, `internal/firewall/`, `internal/daemon/`, `internal/config/`, `internal/history/`, `internal/notify/`, `internal/webui/` — one concern each, same portable/OS-glue split where relevant.
-- `internal/cli/` — Cobra command tree, tested against fakes (`*test` sibling packages: `scantest`, `killtest`, `proctest`, `firewalltest`, `restarttest`).
-- `internal/tui/` — the Bubble Tea Model/Update/View. Deterministic tests via an injectable clock (`model_test.go`), no real terminal needed.
-
-## The portable/glue split, and why it matters
-
-Every OS-specific concern (parsing `/proc/net/tcp`, shelling out to `lsof`, calling Win32 APIs) is split into two halves:
-
-1. A **pure parser or algorithm** with no build tags and no I/O of its own — e.g. `scan/procfmt.ParseTCPTable` takes an `io.Reader`, not a file path. This half gets real `go test` coverage on any host OS, including CI runners and contributors' machines regardless of what they're running.
-2. A thin **OS glue** layer (`scan_linux.go`, etc.) that does the actual file read / exec / syscall and hands the raw bytes to the pure half.
-
-If you're adding a new OS-specific data source, follow this split rather than inlining parsing logic into the glue file — it's the difference between "testable everywhere" and "only compile-checked outside of CI."
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture: the package map, the portable/OS-glue split (the thing to understand before making any non-trivial change), the kill ladder's algorithm, and the TUI's concurrency model. The short version: every OS-specific concern (parsing `/proc/net/tcp`, shelling out to `lsof`, calling Win32 APIs) is split into a pure, build-tag-free parser (real `go test` coverage on any host OS) and a thin OS-glue layer that does the actual file read/exec/syscall. If you're adding a new OS-specific data source, follow that split rather than inlining parsing logic into the glue file — it's the difference between "testable everywhere" and "only compile-checked outside of CI."
 
 ## Testing expectations
 

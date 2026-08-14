@@ -153,6 +153,8 @@ Requires Go 1.26+. No cgo, no external dependencies beyond the Go module graph �
 
 ## More docs
 
+- [EXAMPLES.md](EXAMPLES.md) — real-world recipes: scripting `--json`, status-bar integration, the auto-kill daemon and firewall rules walked through end to end, container debugging
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how porthole is built: the kill ladder's algorithm, the portable/OS-glue split, the TUI's concurrency model
 - [FAQ.md](FAQ.md) — safety/permissions questions, how porthole compares to `lsof`/`fkill-cli`/`npx kill-port`
 - [ROADMAP.md](ROADMAP.md) — what's shipped, what's not verified yet, what's next
 - [CHANGELOG.md](CHANGELOG.md) — release history
