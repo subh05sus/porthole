@@ -77,6 +77,7 @@ func NewRootCmd(app *App) *cobra.Command {
 	root.AddCommand(newHistoryCmd(app))
 	root.AddCommand(newServeCmd(app))
 	root.AddCommand(newFirewallCmd(app))
+	root.AddCommand(newDaemonCmd(app))
 
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		return runTUI(app)

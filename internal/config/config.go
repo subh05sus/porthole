@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,6 +20,25 @@ type Config struct {
 	Theme         string          `yaml:"theme"` // "minimal" | "full" | "plain"
 	Animations    bool            `yaml:"animations"`
 	DefaultSignal string          `yaml:"default_signal"`
+	AutoKill      AutoKill        `yaml:"auto_kill"`
+}
+
+// AutoKill configures `porthole daemon` (FUTURE_PLANS.md's parked
+// auto-kill-daemon idea) — disabled by default even if this section is
+// present but Enabled is left unset, and Allow is the *only* way a
+// (port, process) pair becomes eligible: no wildcards, no ranges, ever.
+type AutoKill struct {
+	Enabled bool            `yaml:"enabled"`
+	Allow   []AutoKillEntry `yaml:"allow"`
+}
+
+// AutoKillEntry is one exact (port, process-name) pair the daemon is
+// allowed to act on. Process is matched case-insensitively (process-name
+// casing varies across platforms, e.g. "node" vs "Node.exe") but
+// otherwise exactly — never a prefix, substring, or pattern match.
+type AutoKillEntry struct {
+	Port    int    `yaml:"port"`
+	Process string `yaml:"process"`
 }
 
 // ProtectedPort is one entry in the protected list. The YAML form accepts
@@ -110,4 +130,21 @@ func (c Config) IsProtected(port int) (protected bool, reason string) {
 		}
 	}
 	return false, ""
+}
+
+// IsAutoKillAllowed reports whether (port, process) exactly matches an
+// entry in the auto-kill allow-list. Checks AutoKill.Enabled itself, so
+// callers never need to remember to check it separately — a Config with
+// Enabled left false always returns false here regardless of what's in
+// Allow, matching the "disabled by default" design.
+func (c Config) IsAutoKillAllowed(port int, process string) bool {
+	if !c.AutoKill.Enabled {
+		return false
+	}
+	for _, e := range c.AutoKill.Allow {
+		if e.Port == port && strings.EqualFold(e.Process, process) {
+			return true
+		}
+	}
+	return false
 }

@@ -98,6 +98,75 @@ func TestLoadInvalidProtectedEntryReturnsError(t *testing.T) {
 	}
 }
 
+func TestLoadAutoKillSection(t *testing.T) {
+	path := writeConfig(t, `
+auto_kill:
+  enabled: true
+  allow:
+    - port: 3000
+      process: node
+    - port: 8080
+      process: python
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.AutoKill.Enabled {
+		t.Fatalf("expected AutoKill.Enabled true")
+	}
+	if len(cfg.AutoKill.Allow) != 2 {
+		t.Fatalf("got %d allow entries, want 2: %+v", len(cfg.AutoKill.Allow), cfg.AutoKill.Allow)
+	}
+	if cfg.AutoKill.Allow[0] != (AutoKillEntry{Port: 3000, Process: "node"}) {
+		t.Errorf("got %+v", cfg.AutoKill.Allow[0])
+	}
+}
+
+func TestAutoKillDisabledByDefault(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AutoKill.Enabled {
+		t.Fatalf("expected AutoKill.Enabled false by default")
+	}
+}
+
+func TestIsAutoKillAllowed(t *testing.T) {
+	cfg := Config{AutoKill: AutoKill{
+		Enabled: true,
+		Allow:   []AutoKillEntry{{Port: 3000, Process: "node"}},
+	}}
+
+	if !cfg.IsAutoKillAllowed(3000, "node") {
+		t.Errorf("expected an exact (port, process) match to be allowed")
+	}
+	if !cfg.IsAutoKillAllowed(3000, "Node") {
+		t.Errorf("expected process matching to be case-insensitive")
+	}
+	if cfg.IsAutoKillAllowed(3000, "python") {
+		t.Errorf("expected a different process on the same port to be disallowed")
+	}
+	if cfg.IsAutoKillAllowed(4000, "node") {
+		t.Errorf("expected a different port to be disallowed")
+	}
+}
+
+func TestIsAutoKillAllowedFalseWhenDisabledEvenWithMatchingEntry(t *testing.T) {
+	// The single most important safety property: an allow-list entry
+	// alone is never enough — Enabled must also be explicitly true.
+	cfg := Config{AutoKill: AutoKill{
+		Enabled: false,
+		Allow:   []AutoKillEntry{{Port: 3000, Process: "node"}},
+	}}
+
+	if cfg.IsAutoKillAllowed(3000, "node") {
+		t.Fatalf("expected IsAutoKillAllowed to refuse when AutoKill.Enabled is false, regardless of Allow contents")
+	}
+}
+
 func TestIsProtected(t *testing.T) {
 	cfg := Config{Protected: []ProtectedPort{{Port: 5432, Reason: "postgres"}, {Port: 6379}}}
 
