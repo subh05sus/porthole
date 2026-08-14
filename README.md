@@ -151,9 +151,15 @@ go test ./...
 
 Requires Go 1.26+. No cgo, no external dependencies beyond the Go module graph — porthole ships as a single static binary.
 
+## More docs
+
+- [FAQ.md](FAQ.md) — safety/permissions questions, how porthole compares to `lsof`/`fkill-cli`/`npx kill-port`
+- [ROADMAP.md](ROADMAP.md) — what's shipped, what's not verified yet, what's next
+- [CHANGELOG.md](CHANGELOG.md) — release history
+
 ## Contributing
 
-Bug reports, feature requests, and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports, feature requests, and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
 
 ## Security
 
