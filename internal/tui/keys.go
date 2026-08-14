@@ -3,12 +3,17 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/subh05sus/porthole/internal/config"
+	"github.com/subh05sus/porthole/internal/portrange"
 	"github.com/subh05sus/porthole/internal/scan"
+	"github.com/subh05sus/porthole/internal/tui/theme"
 )
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -23,6 +28,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHelpKey(msg)
 	case modeSettings:
 		return m.handleSettingsKey(msg)
+	case modeSettingsEdit:
+		return m.handleSettingsEditKey(msg)
 	case modeDetail:
 		return m.handleDetailKey(msg)
 	case modeConfirmRestart:
@@ -94,6 +101,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "S":
+		m.settingsCfg = m.cfg
+		m.settingsCursor = 0
+		m.settingsDirty = false
+		m.settingsErr = ""
 		m.mode = modeSettings
 		return m, nil
 
@@ -427,7 +438,235 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rows := settingsRows(m.settingsCfg)
+
+	switch msg.String() {
+	case "up":
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		}
+		return m, nil
+
+	case "down":
+		if m.settingsCursor < len(rows)-1 {
+			m.settingsCursor++
+		}
+		return m, nil
+
+	case "esc", "q", "ctrl+c":
+		m.mode = modeNormal
+		if m.settingsDirty {
+			m.setEphemeralStatus("settings closed, unsaved changes discarded", ephemeralStatusDuration)
+		}
+		m.settingsErr = ""
+		return m, nil
+
+	case "s":
+		return m.saveSettings()
+
+	case "d":
+		return m.deleteSettingsListEntry(rows)
+
+	case "enter", " ":
+		return m.activateSettingsRow(rows)
+	}
+	return m, nil
+}
+
+// activateSettingsRow implements 'enter' on the currently-selected row:
+// a toggle for bool rows, a cycle for the theme enum, opening the
+// text-edit sub-mode for string/duration/add-entry rows, and a no-op for
+// list entries (deleted via 'd' instead, never edited in place — simpler
+// than an in-place multi-field editor for two rarely-changed fields).
+func (m Model) activateSettingsRow(rows []settingsRow) (tea.Model, tea.Cmd) {
+	if m.settingsCursor >= len(rows) {
+		return m, nil
+	}
+	row := rows[m.settingsCursor]
+
+	switch row.kind {
+	case rowTheme:
+		m.settingsCfg.Theme = nextTheme(m.settingsCfg.Theme)
+		m.settingsDirty = true
+	case rowAnimations:
+		m.settingsCfg.Animations = !m.settingsCfg.Animations
+		m.settingsDirty = true
+	case rowHideSystemProcesses:
+		m.settingsCfg.Display.HideSystemProcesses = !m.settingsCfg.Display.HideSystemProcesses
+		m.settingsDirty = true
+	case rowHidePrivilegedPorts:
+		m.settingsCfg.Display.HidePrivilegedPorts = !m.settingsCfg.Display.HidePrivilegedPorts
+		m.settingsDirty = true
+	case rowAutoKillEnabled:
+		m.settingsCfg.AutoKill.Enabled = !m.settingsCfg.AutoKill.Enabled
+		m.settingsDirty = true
+	case rowDevPortRange, rowEscalationTimeout, rowWatchInterval, rowAutoKillInterval, rowAddAutoKillEntry, rowAddProtectedEntry:
+		return m.beginSettingsEdit(row)
+	}
+	return m, nil
+}
+
+// deleteSettingsListEntry removes the selected auto-kill allow-list or
+// protected-port entry from the draft. A no-op on any other row kind.
+func (m Model) deleteSettingsListEntry(rows []settingsRow) (tea.Model, tea.Cmd) {
+	if m.settingsCursor >= len(rows) {
+		return m, nil
+	}
+	row := rows[m.settingsCursor]
+
+	switch row.kind {
+	case rowAutoKillEntry:
+		allow := m.settingsCfg.AutoKill.Allow
+		m.settingsCfg.AutoKill.Allow = append(allow[:row.index], allow[row.index+1:]...)
+		m.settingsDirty = true
+	case rowProtectedEntry:
+		protected := m.settingsCfg.Protected
+		m.settingsCfg.Protected = append(protected[:row.index], protected[row.index+1:]...)
+		m.settingsDirty = true
+	default:
+		return m, nil
+	}
+	if newLen := len(settingsRows(m.settingsCfg)); m.settingsCursor >= newLen {
+		m.settingsCursor = newLen - 1
+	}
+	return m, nil
+}
+
+// beginSettingsEdit opens the text-input sub-mode for a string/duration
+// field or an "add a new entry" action, reusing confirmInput (the same
+// textinput.Model already used for protected-port typed confirmation —
+// the two contexts never overlap) rather than adding a second field.
+func (m Model) beginSettingsEdit(row settingsRow) (tea.Model, tea.Cmd) {
+	ti := textinput.New()
+	ti.Focus()
+
+	switch row.kind {
+	case rowDevPortRange:
+		ti.Placeholder = "e.g. 3000-9999"
+		ti.SetValue(m.settingsCfg.Kill.DevPortRange)
+	case rowEscalationTimeout:
+		ti.Placeholder = "e.g. 2s"
+		ti.SetValue(m.settingsCfg.Kill.EscalationTimeout.String())
+	case rowWatchInterval:
+		ti.Placeholder = "e.g. 2s"
+		ti.SetValue(m.settingsCfg.Watch.Interval.String())
+	case rowAutoKillInterval:
+		ti.Placeholder = "e.g. 5s"
+		ti.SetValue(m.settingsCfg.AutoKill.Interval.String())
+	case rowAddAutoKillEntry:
+		ti.Placeholder = "port process-name, e.g. 3000 node"
+	case rowAddProtectedEntry:
+		ti.Placeholder = "port [reason], e.g. 5432 prod tunnel"
+	}
+
+	m.confirmInput = ti
+	m.settingsEditKind = row.kind
+	m.settingsErr = ""
+	m.mode = modeSettingsEdit
+	return m, nil
+}
+
+func (m Model) handleSettingsEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeSettings
+		m.settingsErr = ""
+		return m, nil
+	case "enter":
+		return m.submitSettingsEdit()
+	}
+	var cmd tea.Cmd
+	m.confirmInput, cmd = m.confirmInput.Update(msg)
+	return m, cmd
+}
+
+// submitSettingsEdit parses and validates confirmInput's value for
+// whatever field settingsEditKind names, applying it to the draft on
+// success or setting settingsErr and staying in the edit sub-mode on
+// failure — an invalid value is never silently accepted.
+func (m Model) submitSettingsEdit() (tea.Model, tea.Cmd) {
+	val := strings.TrimSpace(m.confirmInput.Value())
+
+	switch m.settingsEditKind {
+	case rowDevPortRange:
+		if _, err := portrange.Parse(val); err != nil {
+			m.settingsErr = err.Error()
+			return m, nil
+		}
+		m.settingsCfg.Kill.DevPortRange = val
+
+	case rowEscalationTimeout, rowWatchInterval, rowAutoKillInterval:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			m.settingsErr = "must be a positive duration, e.g. 2s"
+			return m, nil
+		}
+		switch m.settingsEditKind {
+		case rowEscalationTimeout:
+			m.settingsCfg.Kill.EscalationTimeout = config.Duration(d)
+		case rowWatchInterval:
+			m.settingsCfg.Watch.Interval = config.Duration(d)
+		case rowAutoKillInterval:
+			m.settingsCfg.AutoKill.Interval = config.Duration(d)
+		}
+
+	case rowAddAutoKillEntry:
+		port, process, err := parsePortAndRest(val)
+		if err != nil || process == "" {
+			m.settingsErr = "expected: port process-name, e.g. 3000 node"
+			return m, nil
+		}
+		m.settingsCfg.AutoKill.Allow = append(m.settingsCfg.AutoKill.Allow, config.AutoKillEntry{Port: port, Process: process})
+
+	case rowAddProtectedEntry:
+		port, reason, err := parsePortAndRest(val)
+		if err != nil {
+			m.settingsErr = "expected: port [reason], e.g. 5432 prod tunnel"
+			return m, nil
+		}
+		m.settingsCfg.Protected = append(m.settingsCfg.Protected, config.ProtectedPort{Port: port, Reason: reason})
+	}
+
+	m.settingsDirty = true
+	m.settingsErr = ""
+	m.mode = modeSettings
+	return m, nil
+}
+
+// parsePortAndRest splits "PORT rest-of-line" into an int port and the
+// trimmed remainder — used by both add-entry flows: auto-kill treats the
+// remainder as a required process name, protected ports as an optional
+// reason.
+func parsePortAndRest(s string) (int, string, error) {
+	fields := strings.SplitN(s, " ", 2)
+	port, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+	if err != nil {
+		return 0, "", err
+	}
+	rest := ""
+	if len(fields) > 1 {
+		rest = strings.TrimSpace(fields[1])
+	}
+	return port, rest, nil
+}
+
+// saveSettings validates and persists the draft via m.saveConfig
+// (config.SaveDefault in production, a fake in tests), then — only on
+// success — replaces the live m.cfg and rebuilds m.th, so a theme change
+// takes effect immediately rather than requiring a restart, and re-runs
+// applyFilter since the display filters may have changed.
+func (m Model) saveSettings() (tea.Model, tea.Cmd) {
+	if err := m.saveConfig(m.settingsCfg); err != nil {
+		m.settingsErr = err.Error()
+		return m, nil
+	}
+	m.cfg = m.settingsCfg
+	m.th = theme.New(m.cfg.Theme, m.forcePlain)
+	m.applyFilter()
 	m.mode = modeNormal
+	m.settingsDirty = false
+	m.settingsErr = ""
+	m.setEphemeralStatus("settings saved", ephemeralStatusDuration)
 	return m, nil
 }
 

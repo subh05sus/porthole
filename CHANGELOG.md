@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Editable TUI settings** (`S`): the settings screen is now a full editor, not just a viewer — toggle bools, cycle the theme, edit the dev port range/timeouts/intervals inline, and add or delete protected-port and auto-kill allow-list entries, all from the TUI. Edits happen on an in-memory draft; nothing touches disk until an explicit `s` save, and an invalid value is rejected inline rather than silently written.
+
 ## [1.0.0] — 2026-08-14
 
 Initial public release.

@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
+	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/tui"
 	"github.com/subh05sus/porthole/internal/tui/theme"
 )
@@ -24,7 +25,7 @@ func runTUI(app *App) error {
 
 	forcePlain := !tui.EnableVirtualTerminal()
 	th := theme.New(app.Config.Theme, forcePlain)
-	model := tui.New(app.Lister, app.Killer, app.Lookup, app.Spawner, app.Config, th)
+	model := tui.New(app.Lister, app.Killer, app.Lookup, app.Spawner, app.Config, th, forcePlain, config.SaveDefault)
 
 	// WithAltScreen is what makes the fixed-height table actually fixed:
 	// without it bubbletea draws inline, starting from wherever the shell

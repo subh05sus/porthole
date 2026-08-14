@@ -98,6 +98,14 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 // it's a distinct defined type.
 func (d Duration) String() string { return time.Duration(d).String() }
 
+// MarshalYAML writes Duration back out as a human string ("5s"), the
+// mirror image of UnmarshalYAML — without this, yaml.v3 would marshal the
+// underlying int64 nanosecond count directly, since Duration has no
+// special-cased type.
+func (d Duration) MarshalYAML() (any, error) {
+	return d.String(), nil
+}
+
 // AutoKillEntry is one exact (port, process-name) pair the daemon is
 // allowed to act on. Process is matched case-insensitively (process-name
 // casing varies across platforms, e.g. "node" vs "Node.exe") but
@@ -137,6 +145,19 @@ func (p *ProtectedPort) UnmarshalYAML(node *yaml.Node) error {
 	p.Port = raw.Port
 	p.Reason = raw.Reason
 	return nil
+}
+
+// MarshalYAML mirrors UnmarshalYAML's two accepted forms: a bare port
+// number when there's no reason (matching how a hand-written config would
+// naturally write it), a {port, reason} mapping otherwise.
+func (p ProtectedPort) MarshalYAML() (any, error) {
+	if p.Reason == "" {
+		return p.Port, nil
+	}
+	return struct {
+		Port   int    `yaml:"port"`
+		Reason string `yaml:"reason"`
+	}{p.Port, p.Reason}, nil
 }
 
 // DefaultPath returns ~/.porthole.yaml for the current user.
@@ -234,6 +255,43 @@ func LoadDefault() (Config, error) {
 		return defaults(), err
 	}
 	return Load(path)
+}
+
+// Save validates cfg and writes it to path as YAML, creating the parent
+// directory if needed. Refuses to write an invalid config — the same
+// validate() check Load() runs, applied symmetrically on the write path
+// so a caller (the TUI's settings editor) can never persist something
+// Load would then fail to read back. This rewrites the file's full
+// contents from cfg alone: any comments or formatting in a hand-edited
+// file are not preserved.
+func Save(path string, cfg Config) error {
+	if err := cfg.validate(); err != nil {
+		return fmt.Errorf("config: refusing to save invalid config: %w", err)
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("config: marshaling: %w", err)
+	}
+
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("config: creating directory for %s: %w", path, err)
+		}
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("config: writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// SaveDefault saves to DefaultPath.
+func SaveDefault(cfg Config) error {
+	path, err := DefaultPath()
+	if err != nil {
+		return err
+	}
+	return Save(path, cfg)
 }
 
 // IsProtected reports whether port is in the protected list, and its

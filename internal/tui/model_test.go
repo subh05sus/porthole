@@ -26,12 +26,16 @@ type fakeClock struct{ now time.Time }
 func (c *fakeClock) Now() time.Time          { return c.now }
 func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
+// noopSaveConfig stands in for config.SaveDefault in tests, so nothing
+// ever touches the real ~/.porthole.yaml.
+func noopSaveConfig(config.Config) error { return nil }
+
 func newTestModel(services []scan.Service, killer *killtest.FakeKiller) Model {
 	lister := &scantest.FakeLister{Services: services}
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{Animations: true}, theme.New("auto", true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{Animations: true}, theme.New("auto", true), true, noopSaveConfig)
 }
 
 // runCmd executes a tea.Cmd synchronously and feeds its resulting Msg back
@@ -257,7 +261,7 @@ func TestKillUnreachableForHiddenRowViaTUI(t *testing.T) {
 }
 
 func TestScanErrorSetsStatus(t *testing.T) {
-	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(&scantest.FakeLister{Err: errFake}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	if m.scanErr == nil {
@@ -467,7 +471,7 @@ func TestHelpTogglesAndAnyKeyCloses(t *testing.T) {
 	}
 }
 
-func TestSettingsTogglesAndAnyKeyCloses(t *testing.T) {
+func TestSettingsNavigateToggleAndEscCloses(t *testing.T) {
 	m := newTestModel(nil, nil)
 	m = runCmd(t, m, m.Init())
 
@@ -477,10 +481,34 @@ func TestSettingsTogglesAndAnyKeyCloses(t *testing.T) {
 		t.Fatalf("expected modeSettings, got %v", m.mode)
 	}
 
-	m2, _ = m.Update(key("x"))
+	// "animations" is the row at cursor 1 (after "theme").
+	m2, _ = m.Update(key("down"))
+	m = m2.(Model)
+	if m.settingsCursor != 1 {
+		t.Fatalf("expected cursor 1 after down, got %d", m.settingsCursor)
+	}
+
+	wantAnimations := !m.settingsCfg.Animations
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+	if m.settingsCfg.Animations != wantAnimations {
+		t.Fatalf("expected animations toggled to %v, got %v", wantAnimations, m.settingsCfg.Animations)
+	}
+	if !m.settingsDirty {
+		t.Fatal("expected settingsDirty after a toggle")
+	}
+	if m.mode != modeSettings {
+		t.Fatalf("expected to remain in modeSettings after toggling a row, got %v", m.mode)
+	}
+
+	m2, _ = m.Update(key("esc"))
 	m = m2.(Model)
 	if m.mode != modeNormal {
-		t.Fatalf("expected modeNormal after closing settings, got %v", m.mode)
+		t.Fatalf("expected modeNormal after esc, got %v", m.mode)
+	}
+	// Closing without saving must discard the draft's changes.
+	if m.cfg.Animations == wantAnimations {
+		t.Fatal("expected unsaved animations toggle to be discarded on close")
 	}
 }
 
@@ -877,7 +905,7 @@ func TestEnterQueriesFullSocketListWhenQuerierAvailable(t *testing.T) {
 			},
 		},
 	}
-	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -905,7 +933,7 @@ func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
 		FakeLister: scantest.FakeLister{Services: services},
 		QueryErr:   errFake,
 	}
-	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(lister, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -923,7 +951,7 @@ func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
 func TestEnterQueriesResourceStatsWhenQuerierAvailable(t *testing.T) {
 	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
 	lookup := &proctest.FakeQueryingLookup{Resource: proc.ResourceStats{CPUPercent: 12.5, RSSBytes: 50 * 1024 * 1024}}
-	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -945,7 +973,7 @@ func TestEnterQueriesResourceStatsWhenQuerierAvailable(t *testing.T) {
 func TestEnterShowsUnavailableOnResourceQueryError(t *testing.T) {
 	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
 	lookup := &proctest.FakeQueryingLookup{ResourceErr: errFake}
-	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	m2, cmd := m.Update(key("enter"))
@@ -1005,7 +1033,7 @@ func TestSudoBannerForEmptyServicesIsEmpty(t *testing.T) {
 func TestSudoBannerComputedOnceOnFirstScanOnly(t *testing.T) {
 	killer := &killtest.FakeKiller{}
 	lister := &scantest.FakeLister{Services: []scan.Service{{Port: 1, ResolveErr: errFake}, {Port: 2, ResolveErr: errFake}}}
-	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true))
+	m := New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 	m = runCmd(t, m, m.Init())
 
 	if m.sudoBanner == "" {
@@ -1033,7 +1061,7 @@ func newRestartTestModel(services []scan.Service, killer *killtest.FakeKiller, l
 	if spawner == nil {
 		spawner = &restarttest.FakeSpawner{}
 	}
-	return New(lister, killer, lookup, spawner, config.Config{}, theme.New("auto", true))
+	return New(lister, killer, lookup, spawner, config.Config{}, theme.New("auto", true), true, noopSaveConfig)
 }
 
 func TestRestartConfirmFlowSuccess(t *testing.T) {
@@ -1155,7 +1183,7 @@ func newProtectedTestModel(services []scan.Service, killer *killtest.FakeKiller,
 	if killer == nil {
 		killer = &killtest.FakeKiller{}
 	}
-	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, cfg, theme.New("auto", true))
+	return New(lister, killer, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, cfg, theme.New("auto", true), true, noopSaveConfig)
 }
 
 func typeString(t *testing.T, m Model, s string) Model {
@@ -1293,5 +1321,236 @@ func TestContainerBackedRowRendersWhaleGlyph(t *testing.T) {
 	view := m.renderTable()
 	if !strings.Contains(view, "🐳") {
 		t.Fatalf("expected the container-backed row to render a whale glyph, got:\n%s", view)
+	}
+}
+
+// enterSettingsAndNavigate opens the settings screen and moves the cursor
+// down n times, returning the resulting Model positioned on that row.
+func enterSettingsAndNavigate(t *testing.T, m Model, n int) Model {
+	t.Helper()
+	m2, _ := m.Update(key("S"))
+	m = m2.(Model)
+	for i := 0; i < n; i++ {
+		m2, _ = m.Update(key("down"))
+		m = m2.(Model)
+	}
+	return m
+}
+
+func TestSettingsEditDevPortRangeAppliesValidValue(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 4) // dev_port_range row
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	if m.mode != modeSettingsEdit || m.settingsEditKind != rowDevPortRange {
+		t.Fatalf("expected modeSettingsEdit/rowDevPortRange, got mode=%v kind=%v", m.mode, m.settingsEditKind)
+	}
+
+	m = typeString(t, m, "5000-6000")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettings {
+		t.Fatalf("expected back to modeSettings after a valid submit, got %v", m.mode)
+	}
+	if m.settingsCfg.Kill.DevPortRange != "5000-6000" {
+		t.Errorf("got Kill.DevPortRange %q, want 5000-6000", m.settingsCfg.Kill.DevPortRange)
+	}
+	if !m.settingsDirty {
+		t.Error("expected settingsDirty after a successful edit")
+	}
+}
+
+func TestSettingsEditDevPortRangeRejectsInvalidValue(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 4) // dev_port_range row
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	m = typeString(t, m, "not-a-range")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettingsEdit {
+		t.Fatalf("expected to remain in modeSettingsEdit after an invalid submit, got %v", m.mode)
+	}
+	if m.settingsErr == "" {
+		t.Error("expected settingsErr to be set for an invalid dev port range")
+	}
+	if m.settingsCfg.Kill.DevPortRange == "not-a-range" {
+		t.Error("expected the invalid value to not be applied to the draft")
+	}
+}
+
+func TestSettingsEditEscalationTimeoutRejectsNonPositive(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 5) // escalation_timeout row
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	m = typeString(t, m, "0s")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettingsEdit {
+		t.Fatalf("expected to remain in modeSettingsEdit after a non-positive duration, got %v", m.mode)
+	}
+	if m.settingsErr == "" {
+		t.Error("expected settingsErr to be set for a non-positive escalation timeout")
+	}
+}
+
+func TestSettingsAddAutoKillEntry(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 9) // "+ add allow-list entry" row (no existing entries)
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	if m.mode != modeSettingsEdit || m.settingsEditKind != rowAddAutoKillEntry {
+		t.Fatalf("expected modeSettingsEdit/rowAddAutoKillEntry, got mode=%v kind=%v", m.mode, m.settingsEditKind)
+	}
+
+	m = typeString(t, m, "3000 node")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettings {
+		t.Fatalf("expected back to modeSettings, got %v", m.mode)
+	}
+	if len(m.settingsCfg.AutoKill.Allow) != 1 || m.settingsCfg.AutoKill.Allow[0] != (config.AutoKillEntry{Port: 3000, Process: "node"}) {
+		t.Errorf("got AutoKill.Allow %+v, want a single {3000 node} entry", m.settingsCfg.AutoKill.Allow)
+	}
+	if !m.settingsDirty {
+		t.Error("expected settingsDirty after adding an entry")
+	}
+}
+
+func TestSettingsAddAutoKillEntryRejectsMissingProcessName(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 9)
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	m = typeString(t, m, "3000")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettingsEdit {
+		t.Fatalf("expected to remain in modeSettingsEdit without a process name, got %v", m.mode)
+	}
+	if m.settingsErr == "" {
+		t.Error("expected settingsErr to be set")
+	}
+	if len(m.settingsCfg.AutoKill.Allow) != 0 {
+		t.Errorf("expected no entry to be added, got %+v", m.settingsCfg.AutoKill.Allow)
+	}
+}
+
+func TestSettingsAddProtectedPortEntry(t *testing.T) {
+	m := newTestModel(nil, nil)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 10) // "+ add protected port" row (no existing entries)
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+	if m.mode != modeSettingsEdit || m.settingsEditKind != rowAddProtectedEntry {
+		t.Fatalf("expected modeSettingsEdit/rowAddProtectedEntry, got mode=%v kind=%v", m.mode, m.settingsEditKind)
+	}
+
+	m = typeString(t, m, "5432 prod db")
+	m2, _ = m.Update(key("enter"))
+	m = m2.(Model)
+
+	if m.mode != modeSettings {
+		t.Fatalf("expected back to modeSettings, got %v", m.mode)
+	}
+	if len(m.settingsCfg.Protected) != 1 || m.settingsCfg.Protected[0] != (config.ProtectedPort{Port: 5432, Reason: "prod db"}) {
+		t.Errorf("got Protected %+v, want a single {5432 prod db} entry", m.settingsCfg.Protected)
+	}
+}
+
+func TestSettingsDeleteListEntry(t *testing.T) {
+	cfg := config.Config{
+		Animations: true,
+		AutoKill:   config.AutoKill{Allow: []config.AutoKillEntry{{Port: 3000, Process: "node"}}},
+		Protected:  []config.ProtectedPort{{Port: 5432}},
+	}
+	m := newProtectedTestModel(nil, nil, cfg)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 9) // auto_kill.allow[0] row
+
+	m2, _ := m.Update(key("d"))
+	m = m2.(Model)
+
+	if len(m.settingsCfg.AutoKill.Allow) != 0 {
+		t.Errorf("expected the allow-list entry to be deleted, got %+v", m.settingsCfg.AutoKill.Allow)
+	}
+	if !m.settingsDirty {
+		t.Error("expected settingsDirty after deleting an entry")
+	}
+	if len(m.settingsCfg.Protected) != 1 {
+		t.Errorf("expected the protected list to be untouched, got %+v", m.settingsCfg.Protected)
+	}
+}
+
+func TestSettingsSavePersistsDraftAndAppliesToLiveConfig(t *testing.T) {
+	var saved config.Config
+	saveCalls := 0
+	save := func(cfg config.Config) error {
+		saved = cfg
+		saveCalls++
+		return nil
+	}
+	m := New(&scantest.FakeLister{}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{Animations: true}, theme.New("auto", true), true, save)
+	m = runCmd(t, m, m.Init())
+	m = enterSettingsAndNavigate(t, m, 1) // animations row
+
+	m2, _ := m.Update(key("enter")) // toggle animations off
+	m = m2.(Model)
+	if !m.settingsDirty {
+		t.Fatal("expected dirty after toggling animations")
+	}
+
+	m2, _ = m.Update(key("s"))
+	m = m2.(Model)
+
+	if saveCalls != 1 {
+		t.Fatalf("expected saveConfig to be called once, got %d", saveCalls)
+	}
+	if saved.Animations {
+		t.Error("expected the saved config to reflect the toggled-off animations")
+	}
+	if m.cfg.Animations {
+		t.Error("expected the live model config to be updated after a successful save")
+	}
+	if m.mode != modeNormal {
+		t.Fatalf("expected modeNormal after save, got %v", m.mode)
+	}
+	if m.settingsDirty {
+		t.Error("expected settingsDirty to be cleared after a successful save")
+	}
+}
+
+func TestSettingsSaveFailureKeepsDraftOpenWithError(t *testing.T) {
+	save := func(config.Config) error { return errFake }
+	m := New(&scantest.FakeLister{}, &killtest.FakeKiller{}, &proctest.FakeLookup{}, &restarttest.FakeSpawner{}, config.Config{Animations: true}, theme.New("auto", true), true, save)
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("S"))
+	m = m2.(Model)
+	m2, _ = m.Update(key("s"))
+	m = m2.(Model)
+
+	if m.mode != modeSettings {
+		t.Fatalf("expected to remain in modeSettings after a failed save, got %v", m.mode)
+	}
+	if !strings.Contains(m.settingsErr, "boom") {
+		t.Errorf("expected settingsErr to mention the save failure, got %q", m.settingsErr)
 	}
 }

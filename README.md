@@ -92,8 +92,23 @@ Every command supports `--help` for the full flag list.
 | `a` | Toggle showing rows hidden by `display.hide_*` |
 | `w` | Toggle watch mode |
 | `r` | Refresh |
+| `S` | Edit settings (`~/.porthole.yaml`) |
 | `?` | Help |
 | `q` / `esc` | Quit |
+
+### Editing settings in the TUI
+
+Press `S` to open the settings screen — every value in `~/.porthole.yaml`, including the protected-port list and the auto-kill allow-list, is editable in place:
+
+| Key | Action |
+|---|---|
+| `↑` `↓` | Navigate rows |
+| `enter` | Toggle a bool, cycle the theme, or open a text field to edit/add an entry |
+| `d` | Delete the selected list entry (protected port or auto-kill allow entry) |
+| `s` | Save — validates and writes to `~/.porthole.yaml` |
+| `esc` / `q` | Close — discards any unsaved changes |
+
+Edits happen on an in-memory draft; nothing touches disk until you press `s`. An invalid value (a bad duration, an unparseable port range) is rejected inline with an error, and an invalid config is never written.
 
 ## Configuration
 

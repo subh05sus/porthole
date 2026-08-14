@@ -46,6 +46,7 @@ const (
 	modeRestarting
 	modeConfirmProtected
 	modeSettings
+	modeSettingsEdit
 )
 
 // watchInterval is how often watch mode rescans, per PRD §6's "watch" verb.
@@ -142,6 +143,31 @@ type Model struct {
 	// flag. Session-scoped only, never persisted.
 	showAll bool
 
+	// Settings editor state (modeSettings/modeSettingsEdit). settingsCfg is
+	// a draft copy edited in place — m.cfg is only replaced on an explicit
+	// save (see saveSettings), so closing without saving discards it.
+	// settingsEditKind records which row a modeSettingsEdit text-input
+	// session belongs to, since confirmInput itself is untyped.
+	settingsCfg      config.Config
+	settingsCursor   int
+	settingsDirty    bool
+	settingsErr      string
+	settingsEditKind settingsRowKind
+
+	// forcePlain is stored (rather than only consulted once in cli/tui.go)
+	// so a live theme change from the settings editor can rebuild m.th
+	// without re-deriving the Windows-VT/NO_COLOR environment check — it's
+	// a fixed environment fact for this process's lifetime, not something
+	// that changes at runtime.
+	forcePlain bool
+
+	// saveConfig persists a Config — config.SaveDefault in production,
+	// swapped for a fake in tests so nothing here ever touches the real
+	// ~/.porthole.yaml (the exact test-pollution mistake M6's project-cache
+	// work already made once this session, before adding an injectable
+	// seam there too).
+	saveConfig func(config.Config) error
+
 	status       string
 	statusExpiry time.Time // while non-zero and in the future, status overrides computeNormalStatus
 	scanErr      error
@@ -161,8 +187,11 @@ type Model struct {
 }
 
 // New builds a Model. Dependencies are injected so this whole package can
-// be tested without a real OS (see model_test.go).
-func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner restart.Spawner, cfg config.Config, th theme.Theme) Model {
+// be tested without a real OS (see model_test.go). forcePlain is the
+// same environment fact cli/tui.go already computes for theme.New;
+// saveConfig persists the settings editor's draft — production wiring
+// passes config.SaveDefault, tests pass a fake that never touches disk.
+func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner restart.Spawner, cfg config.Config, th theme.Theme, forcePlain bool, saveConfig func(config.Config) error) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter by port, process, or project"
 	ti.Prompt = "/ "
@@ -184,6 +213,8 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 		scanStart:   clock(),
 		querier:     querier,
 		resQuerier:  resQuerier,
+		forcePlain:  forcePlain,
+		saveConfig:  saveConfig,
 	}
 }
 

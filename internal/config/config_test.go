@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -307,6 +309,110 @@ func TestIsAutoKillAllowedFalseWhenDisabledEvenWithMatchingEntry(t *testing.T) {
 	if cfg.IsAutoKillAllowed(3000, "node") {
 		t.Fatalf("expected IsAutoKillAllowed to refuse when AutoKill.Enabled is false, regardless of Allow contents")
 	}
+}
+
+func TestSaveThenLoadRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", ".porthole.yaml")
+	cfg := Config{
+		Protected: []ProtectedPort{
+			{Port: 5432},
+			{Port: 3306, Reason: "prod tunnel"},
+		},
+		Theme:         "plain",
+		Animations:    false,
+		DefaultSignal: "SIGTERM",
+		AutoKill: AutoKill{
+			Enabled:  true,
+			Allow:    []AutoKillEntry{{Port: 3000, Process: "node"}},
+			Interval: Duration(10 * time.Second),
+		},
+		Kill: Kill{
+			DevPortRange:      "9000-9010",
+			EscalationTimeout: Duration(7 * time.Second),
+		},
+		Watch:   Watch{Interval: Duration(3 * time.Second)},
+		Display: Display{HideSystemProcesses: true, HidePrivilegedPorts: true},
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: unexpected error: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: unexpected error: %v", err)
+	}
+	if !reflect.DeepEqual(got, cfg) {
+		t.Errorf("round-tripped config differs:\n got  %+v\n want %+v", got, cfg)
+	}
+}
+
+func TestSaveRefusesInvalidConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".porthole.yaml")
+	cfg := Config{Theme: "not-a-real-theme"}
+
+	if err := Save(path, cfg); err == nil {
+		t.Fatalf("expected Save to refuse an invalid config")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected no file to be written on a refused save, stat err = %v", err)
+	}
+}
+
+func TestMarshalYAMLProtectedPortOmitsEmptyReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".porthole.yaml")
+	cfg := Config{Protected: []ProtectedPort{{Port: 5432}}}
+	cfg = withValidDefaults(cfg)
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "- 5432\n") {
+		t.Errorf("expected a bare port entry in output YAML, got:\n%s", data)
+	}
+}
+
+func TestMarshalYAMLDurationWritesHumanString(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".porthole.yaml")
+	cfg := withValidDefaults(Config{Watch: Watch{Interval: Duration(90 * time.Second)}})
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "interval: 1m30s") {
+		t.Errorf("expected a human duration string in output YAML, got:\n%s", data)
+	}
+}
+
+// withValidDefaults fills in whichever fields validate() requires but the
+// caller doesn't care about, so tests can focus on the one field under
+// test without Save rejecting the whole config as invalid.
+func withValidDefaults(cfg Config) Config {
+	base := defaults()
+	if cfg.Theme == "" {
+		cfg.Theme = base.Theme
+	}
+	if cfg.Kill.DevPortRange == "" {
+		cfg.Kill.DevPortRange = base.Kill.DevPortRange
+	}
+	if cfg.Kill.EscalationTimeout <= 0 {
+		cfg.Kill.EscalationTimeout = base.Kill.EscalationTimeout
+	}
+	if cfg.Watch.Interval <= 0 {
+		cfg.Watch.Interval = base.Watch.Interval
+	}
+	if cfg.AutoKill.Interval <= 0 {
+		cfg.AutoKill.Interval = base.AutoKill.Interval
+	}
+	return cfg
 }
 
 func TestIsProtected(t *testing.T) {

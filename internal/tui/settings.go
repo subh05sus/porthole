@@ -3,70 +3,139 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/subh05sus/porthole/internal/config"
 )
 
-// settingsView renders every value currently loaded from ~/.porthole.yaml
-// (or the built-in defaults, if the file is absent/a field was never set)
-// — the one place in the TUI that shows the actual config values, as
-// opposed to just their effects (the 🛡/🐳 glyphs, hidden rows, etc.).
+// settingsRowKind identifies both what a settings row displays and how
+// 'enter' should behave on it — a toggle, an enum cycle, a text-edit
+// sub-mode, a list entry (deletable via 'd', otherwise inert), or an
+// "add a new entry" action row.
+type settingsRowKind int
+
+const (
+	rowTheme settingsRowKind = iota
+	rowAnimations
+	rowHideSystemProcesses
+	rowHidePrivilegedPorts
+	rowDevPortRange
+	rowEscalationTimeout
+	rowWatchInterval
+	rowAutoKillEnabled
+	rowAutoKillInterval
+	rowAutoKillEntry
+	rowAddAutoKillEntry
+	rowProtectedEntry
+	rowAddProtectedEntry
+)
+
+type settingsRow struct {
+	kind  settingsRowKind
+	label string
+	value string
+	// index is only meaningful for rowAutoKillEntry/rowProtectedEntry —
+	// the entry's position in cfg.AutoKill.Allow/cfg.Protected.
+	index int
+}
+
+// settingsRows builds the full addressable row list from cfg, rebuilt
+// fresh on every render/key event rather than cached — cfg.AutoKill.Allow
+// and cfg.Protected can grow/shrink as the user adds/deletes entries, so
+// there's no stable row count to memoize against.
+func settingsRows(cfg config.Config) []settingsRow {
+	rows := []settingsRow{
+		{kind: rowTheme, label: "theme", value: cfg.Theme},
+		{kind: rowAnimations, label: "animations", value: boolStr(cfg.Animations)},
+		{kind: rowHideSystemProcesses, label: "display.hide_system_processes", value: boolStr(cfg.Display.HideSystemProcesses)},
+		{kind: rowHidePrivilegedPorts, label: "display.hide_privileged_ports", value: boolStr(cfg.Display.HidePrivilegedPorts)},
+		{kind: rowDevPortRange, label: "kill.dev_port_range", value: nonEmpty(cfg.Kill.DevPortRange, "-")},
+		{kind: rowEscalationTimeout, label: "kill.escalation_timeout", value: cfg.Kill.EscalationTimeout.String()},
+		{kind: rowWatchInterval, label: "watch.interval", value: cfg.Watch.Interval.String()},
+		{kind: rowAutoKillEnabled, label: "auto_kill.enabled", value: boolStr(cfg.AutoKill.Enabled)},
+		{kind: rowAutoKillInterval, label: "auto_kill.interval", value: cfg.AutoKill.Interval.String()},
+	}
+
+	for i, e := range cfg.AutoKill.Allow {
+		rows = append(rows, settingsRow{kind: rowAutoKillEntry, label: fmt.Sprintf("  auto_kill.allow[%d]", i), value: fmt.Sprintf(":%d %s", e.Port, e.Process), index: i})
+	}
+	rows = append(rows, settingsRow{kind: rowAddAutoKillEntry, label: "  + add allow-list entry"})
+
+	for i, p := range cfg.Protected {
+		value := fmt.Sprintf(":%d", p.Port)
+		if p.Reason != "" {
+			value += " — " + p.Reason
+		}
+		rows = append(rows, settingsRow{kind: rowProtectedEntry, label: fmt.Sprintf("  protected[%d]", i), value: value, index: i})
+	}
+	rows = append(rows, settingsRow{kind: rowAddProtectedEntry, label: "  + add protected port"})
+
+	return rows
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// nextTheme cycles auto -> color -> plain -> auto.
+func nextTheme(cur string) string {
+	switch cur {
+	case "auto":
+		return "color"
+	case "color":
+		return "plain"
+	default:
+		return "auto"
+	}
+}
+
+// settingsView renders the editable settings screen: every row from
+// settingsRows, the cursor, a dirty (unsaved changes) indicator, and any
+// pending validation error.
 func (m Model) settingsView() string {
-	cfg := m.cfg
+	rows := settingsRows(m.settingsCfg)
 
 	var b strings.Builder
-	b.WriteString(m.th.Header.Render("porthole — settings (~/.porthole.yaml)"))
+	title := "porthole — settings (~/.porthole.yaml)"
+	if m.settingsDirty {
+		title += " *"
+	}
+	b.WriteString(m.th.Header.Render(title))
 	b.WriteString("\n\n")
 
-	row := func(label, value string) {
-		b.WriteString(m.th.Muted.Render(padColumns(label, 22)))
-		b.WriteString(value)
-		b.WriteString("\n")
-	}
-	section := func(title string) {
-		b.WriteString("\n")
-		b.WriteString(m.th.Muted.Render(title))
-		b.WriteString("\n")
-	}
-
-	row("theme", cfg.Theme)
-	row("animations", fmt.Sprintf("%v", cfg.Animations))
-
-	section("display")
-	row("  hide_system_processes", fmt.Sprintf("%v", cfg.Display.HideSystemProcesses))
-	row("  hide_privileged_ports", fmt.Sprintf("%v", cfg.Display.HidePrivilegedPorts))
-
-	section("kill")
-	row("  dev_port_range", nonEmpty(cfg.Kill.DevPortRange, "-"))
-	row("  escalation_timeout", cfg.Kill.EscalationTimeout.String())
-
-	section("watch")
-	row("  interval", cfg.Watch.Interval.String())
-
-	section("auto-kill daemon (auto_kill)")
-	row("  enabled", fmt.Sprintf("%v", cfg.AutoKill.Enabled))
-	row("  interval", cfg.AutoKill.Interval.String())
-	if len(cfg.AutoKill.Allow) == 0 {
-		row("  allow-list", "(empty)")
-	} else {
-		row("  allow-list", fmt.Sprintf("%d entr(y/ies)", len(cfg.AutoKill.Allow)))
-		for _, e := range cfg.AutoKill.Allow {
-			b.WriteString(fmt.Sprintf("    :%d  %s\n", e.Port, e.Process))
+	for i, r := range rows {
+		cursor := "  "
+		if i == m.settingsCursor {
+			cursor = "▸ "
 		}
+		line := cursor + padColumns(r.label, 34) + r.value
+		if i == m.settingsCursor {
+			b.WriteString(m.th.Selected.Render(line))
+		} else {
+			b.WriteString(line)
+		}
+		b.WriteString("\n")
 	}
 
-	section("protected ports")
-	if len(cfg.Protected) == 0 {
-		b.WriteString("  (none)\n")
-	} else {
-		for _, p := range cfg.Protected {
-			line := fmt.Sprintf("  :%d", p.Port)
-			if p.Reason != "" {
-				line += " — " + p.Reason
-			}
-			b.WriteString(line + "\n")
-		}
+	if m.settingsErr != "" {
+		b.WriteString("\n")
+		b.WriteString(m.th.Danger.Render("error: " + m.settingsErr))
+		b.WriteString("\n")
+	}
+
+	if m.mode == modeSettingsEdit {
+		b.WriteString("\n")
+		b.WriteString(m.confirmInput.View())
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.th.HintBar.Render("any key to close"))
+	if m.mode == modeSettingsEdit {
+		b.WriteString(m.th.HintBar.Render("enter confirm · esc cancel"))
+	} else {
+		b.WriteString(m.th.HintBar.Render("↑↓ nav · enter toggle/edit · d delete entry · s save · esc/q close (discards unsaved changes)"))
+	}
 	return b.String()
 }
