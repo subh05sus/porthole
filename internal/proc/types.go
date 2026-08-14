@@ -42,3 +42,23 @@ type Info struct {
 type Lookup interface {
 	Lookup(pid int) (Info, error)
 }
+
+// ResourceStats is a point-in-time CPU/memory reading for one process.
+type ResourceStats struct {
+	// CPUPercent follows ps/htop's convention, not Task Manager's: percent
+	// of one CPU core, unnormalized by core count, so a saturated
+	// multi-threaded process can read above 100. Consistent across all
+	// three platforms rather than picking Windows' different default.
+	CPUPercent float64
+	RSSBytes   uint64
+}
+
+// ResourceQuerier is an optional capability a Lookup may additionally
+// implement: an on-demand CPU%/RSS reading for one PID, for the TUI detail
+// pane (FUTURE_PLANS.md's resource-stats idea). Deliberately not part of
+// the regular scan/Lookup path — CPU% needs a short delta sample (two
+// reads a brief interval apart), which isn't something every routine scan
+// should pay for.
+type ResourceQuerier interface {
+	Resources(pid int) (ResourceStats, error)
+}

@@ -28,3 +28,22 @@ func (f *FakeLookup) Lookup(pid int) (proc.Info, error) {
 	}
 	return f.Info, nil
 }
+
+var _ proc.ResourceQuerier = (*FakeQueryingLookup)(nil)
+
+// FakeQueryingLookup wraps FakeLookup and additionally implements
+// proc.ResourceQuerier, for tests exercising the TUI detail pane's
+// on-demand CPU%/RSS query — a plain FakeLookup deliberately doesn't
+// implement it, mirroring scantest.FakeQueryingLister's split.
+type FakeQueryingLookup struct {
+	FakeLookup
+	Resource    proc.ResourceStats
+	ResourceErr error
+}
+
+func (f *FakeQueryingLookup) Resources(pid int) (proc.ResourceStats, error) {
+	if f.ResourceErr != nil {
+		return proc.ResourceStats{}, f.ResourceErr
+	}
+	return f.Resource, nil
+}

@@ -36,6 +36,19 @@ func (m Model) detailView() string {
 		b.WriteString("\n")
 	}
 
+	if m.resQuerier != nil {
+		b.WriteString(m.th.Muted.Render(padColumns("Resources", 14)))
+		switch {
+		case m.detailResourcesLoading:
+			b.WriteString("loading…")
+		case m.detailResourcesErr != nil:
+			b.WriteString("unavailable: " + m.detailResourcesErr.Error())
+		case m.detailResources != nil:
+			b.WriteString(fmt.Sprintf("%.1f%% CPU, %s RSS", m.detailResources.CPUPercent, formatBytes(m.detailResources.RSSBytes)))
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
 	switch {
 	case m.detailSocketsLoading:
@@ -53,6 +66,17 @@ func (m Model) detailView() string {
 	b.WriteString("\n")
 	b.WriteString(m.th.HintBar.Render("any key to close"))
 	return b.String()
+}
+
+// formatBytes renders an RSS byte count as a human-scale MB/GB figure —
+// the raw byte count from GetProcessMemoryInfo/VmRSS/ps's rss= isn't
+// meant to be read literally.
+func formatBytes(b uint64) string {
+	const mb = 1024 * 1024
+	if b >= 1024*mb {
+		return fmt.Sprintf("%.2f GB", float64(b)/(1024*mb))
+	}
+	return fmt.Sprintf("%.1f MB", float64(b)/mb)
 }
 
 func processOr(s string) string { return nonEmpty(s, "?") }

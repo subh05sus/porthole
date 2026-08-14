@@ -117,6 +117,16 @@ type Model struct {
 	detailSockets        []scan.Service
 	detailSocketsLoading bool
 
+	// resQuerier is the optional proc.ResourceQuerier capability (nil if
+	// the injected Lookup doesn't implement it) driving the detail pane's
+	// on-demand CPU%/RSS reading, same "capability detected once in New,
+	// queried only when the pane opens" shape as querier/detailSockets
+	// above.
+	resQuerier             proc.ResourceQuerier
+	detailResources        *proc.ResourceStats
+	detailResourcesLoading bool
+	detailResourcesErr     error
+
 	pendingRestart *scan.Service // row awaiting the R confirmation prompt
 	restartStart   time.Time     // when the in-flight restart began, for the spinner
 
@@ -152,6 +162,7 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 
 	clock := time.Now
 	querier, _ := lister.(scan.SocketQuerier)
+	resQuerier, _ := lookup.(proc.ResourceQuerier)
 	return Model{
 		lister:      lister,
 		killer:      killer,
@@ -165,6 +176,7 @@ func New(lister scan.Lister, killer kill.Killer, lookup proc.Lookup, spawner res
 		scanning:    true,
 		scanStart:   clock(),
 		querier:     querier,
+		resQuerier:  resQuerier,
 	}
 }
 
@@ -338,6 +350,42 @@ func (m Model) handleDetailSockets(msg detailSocketsMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+type detailResourcesMsg struct {
+	pid   int
+	stats proc.ResourceStats
+	err   error
+}
+
+// detailResourcesCmd fetches a CPU%/RSS reading for pid via the injected
+// ResourceQuerier, off the UI thread. Only called when m.resQuerier is
+// non-nil. The query itself blocks for a short CPU-time delta sample (see
+// resources_linux.go/resources_windows.go's cpuSampleWindow) — that's
+// exactly why this is a tea.Cmd rather than an inline call: it must never
+// stall Update.
+func (m Model) detailResourcesCmd(pid int) tea.Cmd {
+	querier := m.resQuerier
+	return func() tea.Msg {
+		stats, err := querier.Resources(pid)
+		return detailResourcesMsg{pid: pid, stats: stats, err: err}
+	}
+}
+
+func (m Model) handleDetailResources(msg detailResourcesMsg) (tea.Model, tea.Cmd) {
+	m.detailResourcesLoading = false
+	if m.detailTarget == nil || msg.pid != m.detailTarget.PID {
+		// Pane was closed or reopened on a different row before this
+		// landed — drop it, same as handleDetailSockets.
+		return m, nil
+	}
+	if msg.err != nil {
+		m.detailResourcesErr = msg.err
+		return m, nil
+	}
+	stats := msg.stats
+	m.detailResources = &stats
+	return m, nil
+}
+
 type tickMsg time.Time
 
 func (m Model) tickCmd() tea.Cmd {
@@ -373,6 +421,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailSocketsMsg:
 		return m.handleDetailSockets(msg)
+
+	case detailResourcesMsg:
+		return m.handleDetailResources(msg)
 
 	case watchEventMsg:
 		return m.handleWatchEvent(msg)

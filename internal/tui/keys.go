@@ -101,13 +101,23 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			target := *t
 			m.detailTarget = &target
 			m.mode = modeDetail
+
+			var cmds []tea.Cmd
 			if m.querier != nil {
 				m.detailSockets = nil
 				m.detailSocketsLoading = true
-				return m, m.detailSocketsCmd(target.PID)
+				cmds = append(cmds, m.detailSocketsCmd(target.PID))
+			} else {
+				m.detailSockets = m.relatedSockets(target)
+				m.detailSocketsLoading = false
 			}
-			m.detailSockets = m.relatedSockets(target)
-			m.detailSocketsLoading = false
+			if m.resQuerier != nil {
+				m.detailResources = nil
+				m.detailResourcesErr = nil
+				m.detailResourcesLoading = true
+				cmds = append(cmds, m.detailResourcesCmd(target.PID))
+			}
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	}
@@ -124,6 +134,9 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.detailTarget = nil
 	m.detailSockets = nil
 	m.detailSocketsLoading = false
+	m.detailResources = nil
+	m.detailResourcesErr = nil
+	m.detailResourcesLoading = false
 	return m, nil
 }
 

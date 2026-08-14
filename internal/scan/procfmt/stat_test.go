@@ -21,6 +21,12 @@ func TestParseStatSimpleComm(t *testing.T) {
 	if info.StartTimeTicks != 987654321 {
 		t.Errorf("StartTimeTicks = %d, want 987654321", info.StartTimeTicks)
 	}
+	if info.UTimeTicks != 12 {
+		t.Errorf("UTimeTicks = %d, want 12", info.UTimeTicks)
+	}
+	if info.STimeTicks != 3 {
+		t.Errorf("STimeTicks = %d, want 3", info.STimeTicks)
+	}
 }
 
 func TestParseStatCommWithParens(t *testing.T) {

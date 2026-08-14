@@ -10,6 +10,7 @@ import (
 	"github.com/subh05sus/porthole/internal/config"
 	"github.com/subh05sus/porthole/internal/kill"
 	"github.com/subh05sus/porthole/internal/kill/killtest"
+	"github.com/subh05sus/porthole/internal/proc"
 	"github.com/subh05sus/porthole/internal/proc/proctest"
 	"github.com/subh05sus/porthole/internal/restart/restarttest"
 	"github.com/subh05sus/porthole/internal/scan"
@@ -718,6 +719,56 @@ func TestEnterFallsBackToRelatedSocketsOnQueryError(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), ":3000") {
 		t.Fatalf("expected fallback to the last regular scan's sockets, got:\n%s", m.View())
+	}
+}
+
+func TestEnterQueriesResourceStatsWhenQuerierAvailable(t *testing.T) {
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	lookup := &proctest.FakeQueryingLookup{Resource: proc.ResourceStats{CPUPercent: 12.5, RSSBytes: 50 * 1024 * 1024}}
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m = runCmd(t, m, m.Init())
+
+	m2, cmd := m.Update(key("enter"))
+	m = m2.(Model)
+	if !m.detailResourcesLoading {
+		t.Fatalf("expected detailResourcesLoading while the query is in flight")
+	}
+
+	m = runCmd(t, m, cmd)
+	if m.detailResourcesLoading {
+		t.Fatalf("expected detailResourcesLoading cleared once the query completes")
+	}
+	view := m.View()
+	if !strings.Contains(view, "12.5% CPU") || !strings.Contains(view, "50.0 MB") {
+		t.Fatalf("expected CPU/RSS reading in detail view, got:\n%s", view)
+	}
+}
+
+func TestEnterShowsUnavailableOnResourceQueryError(t *testing.T) {
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	lookup := &proctest.FakeQueryingLookup{ResourceErr: errFake}
+	m := New(&scantest.FakeLister{Services: services}, &killtest.FakeKiller{}, lookup, &restarttest.FakeSpawner{}, config.Config{}, theme.New(true))
+	m = runCmd(t, m, m.Init())
+
+	m2, cmd := m.Update(key("enter"))
+	m = m2.(Model)
+	m = runCmd(t, m, cmd)
+
+	if !strings.Contains(m.View(), "unavailable") {
+		t.Fatalf("expected an unavailable message on query error, got:\n%s", m.View())
+	}
+}
+
+func TestResourcesRowAbsentWhenQuerierUnsupported(t *testing.T) {
+	services := []scan.Service{{Port: 3000, PID: 1, Process: "node", Owned: true}}
+	m := newTestModel(services, nil) // plain FakeLookup, no ResourceQuerier
+	m = runCmd(t, m, m.Init())
+
+	m2, _ := m.Update(key("enter"))
+	m = m2.(Model)
+
+	if strings.Contains(m.View(), "Resources") {
+		t.Fatalf("expected no Resources row when the injected Lookup doesn't implement ResourceQuerier, got:\n%s", m.View())
 	}
 }
 
