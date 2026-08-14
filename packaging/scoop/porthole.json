@@ -1,19 +1,21 @@
 {
+  "_comment": "Matches GoReleaser's *real, verified* scoop output shape (dist/scoop/porthole.json after `goreleaser release --snapshot --clean`) — bin lives per-architecture as an array, not as a shared top-level string, which an earlier hand-written version of this file got wrong. checkver/autoupdate below are a deliberate addition beyond GoReleaser's raw output (it doesn't generate them) — recommended by Scoop's own docs so the bucket can self-update between releases without a manual PKGBUILD-style bump each time. Not registered in any bucket; needs every {{ PLACEHOLDER }} filled in from a real release.",
   "version": "{{ VERSION }}",
-  "description": "A port kill switch and service viewer for your terminal.",
-  "homepage": "https://github.com/subh05sus/porthole",
-  "license": "MIT",
   "architecture": {
     "64bit": {
       "url": "https://github.com/subh05sus/porthole/releases/download/v{{ VERSION }}/porthole_{{ VERSION }}_windows_amd64.zip",
+      "bin": ["porthole.exe"],
       "hash": "{{ SHA256_WINDOWS_AMD64 }}"
     },
     "arm64": {
       "url": "https://github.com/subh05sus/porthole/releases/download/v{{ VERSION }}/porthole_{{ VERSION }}_windows_arm64.zip",
+      "bin": ["porthole.exe"],
       "hash": "{{ SHA256_WINDOWS_ARM64 }}"
     }
   },
-  "bin": "porthole.exe",
+  "homepage": "https://github.com/subh05sus/porthole",
+  "license": "MIT",
+  "description": "A port kill switch and service viewer for your terminal.",
   "checkver": {
     "github": "https://github.com/subh05sus/porthole"
   },

@@ -1,9 +1,16 @@
-# GoReleaser config for porthole — local tooling only this session, never
-# run against a real release (no GitHub remote push, no tag, no publish).
-# NOT verified against a real `goreleaser` binary: goreleaser isn't
-# installed in this dev environment. Run `goreleaser check` and
-# `goreleaser release --snapshot --clean` before trusting this against a
-# real release.
+# GoReleaser config for porthole — local tooling only, never run against
+# a real release (no tag, no publish, nothing pushed).
+#
+# Verified for real: `goreleaser check` passes (v2.17.1) except one
+# expected, intentional deprecation warning (`brews`, see its own comment
+# below), and `goreleaser release --snapshot --clean` succeeded end to
+# end — all 6 platform/arch binaries built, archived, checksummed; the
+# generated Homebrew formula and Scoop manifest were inspected directly
+# and used to correct the standalone reference templates in packaging/,
+# which had gotten a few structural details wrong on the first guess
+# (see packaging/homebrew/porthole.rb and packaging/scoop/porthole.json).
+# The resulting windows_amd64 binary was run directly and correctly
+# reported the ldflags-injected version.
 version: 2
 
 project_name: porthole
@@ -33,10 +40,10 @@ archives:
     ids: [porthole]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    format: tar.gz
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - LICENSE
@@ -64,6 +71,14 @@ release:
   # anything without a deliberate follow-up click.
   draft: true
 
+# NOTE: `brews` is flagged deprecated by `goreleaser check` in favor of
+# `homebrew_casks`, but deliberately kept here rather than migrated —
+# Casks are historically a macOS-only mechanism (they carry the .app-
+# bundle/quarantine-attribute concepts of a GUI installer, even for a
+# plain CLI binary), and GoReleaser's own docs don't clearly confirm cask
+# support on Linuxbrew. `brews` still functions today (deprecated, not
+# removed) and is the only path that's actually cross-platform. Revisit
+# if/when GoReleaser drops `brews` support entirely.
 brews:
   - name: porthole
     repository:
