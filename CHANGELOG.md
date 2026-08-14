@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] — 2026-08-14
 
 ### Added
 
@@ -26,4 +26,5 @@ Initial public release.
 - **Auto-kill daemon** (`porthole daemon`): disabled by default, dry-run by default, exact-match allow-list only, re-verifies every match against a fresh scan immediately before acting, rate-limited per port.
 - Shell completions (bash/zsh/fish/PowerShell) via Cobra.
 
+[1.3.0]: https://github.com/subh05sus/porthole/releases/tag/v1.3.0
 [1.0.0]: https://github.com/subh05sus/porthole/releases/tag/v1.0.0
