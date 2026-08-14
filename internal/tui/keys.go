@@ -60,12 +60,14 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
+			m.ensureCursorVisible()
 		}
 		return m, nil
 
 	case "down", "j":
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
+			m.ensureCursorVisible()
 		}
 		return m, nil
 

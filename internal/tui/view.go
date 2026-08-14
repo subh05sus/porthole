@@ -69,6 +69,34 @@ func (m Model) View() string {
 	return b.String()
 }
 
+// visibleRows returns how many data rows the table box can draw without
+// pushing the rest of the view past the terminal height — every other line
+// the View draws (header, banner, blanks, the box's own border edges and
+// column header, the hint bar, and the filter/confirm input line when
+// active) is fixed at one line each, so whatever's left over is the row
+// budget. Returns -1 when the terminal size isn't known yet (no
+// WindowSizeMsg has landed — notably true throughout the test suite),
+// meaning "unbounded": render every row, the old behavior.
+func (m Model) visibleRows() int {
+	if m.height <= 0 {
+		return -1
+	}
+	// header + blank-after-header + border-top + column-header +
+	// border-bottom + blank-after-box + hint-bar.
+	fixed := 7
+	if m.sudoBanner != "" {
+		fixed++
+	}
+	if m.mode == modeFilter || m.mode == modeConfirmProtected {
+		fixed++
+	}
+	visible := m.height - fixed
+	if visible < 1 {
+		visible = 1
+	}
+	return visible
+}
+
 func (m Model) renderTable() string {
 	var b strings.Builder
 
@@ -86,9 +114,31 @@ func (m Model) renderTable() string {
 		return b.String()
 	}
 
+	// visibleRows()==-1 means the terminal size isn't known yet: fall back
+	// to the old unbounded behavior (also what the test suite exercises,
+	// since it never sends a WindowSizeMsg). Otherwise window the list to
+	// the offset ensureCursorVisible has already computed, so the box stays
+	// a fixed height and never overflows the terminal — PORT-xx: previously
+	// every filtered row rendered unconditionally, so a list longer than
+	// the terminal spilled past it and up/down navigation looked broken
+	// once the cursor scrolled off screen.
+	visible := m.visibleRows()
+	start, end := 0, len(m.filtered)
+	if visible >= 0 {
+		start = m.listOffset
+		if start > len(m.filtered) {
+			start = len(m.filtered)
+		}
+		end = start + visible
+		if end > len(m.filtered) {
+			end = len(m.filtered)
+		}
+	}
+
 	revealElapsed := m.clock().Sub(m.revealStart)
 	rendered := 0
-	for i, s := range m.filtered {
+	for i := start; i < end; i++ {
+		s := m.filtered[i]
 		// Streaming reveal (PRD §5.3): rows appear staggered rather than
 		// all at once. Since Lister.List isn't actually streaming, this
 		// simulates the cascade against the already-resolved list — a row
@@ -107,7 +157,12 @@ func (m Model) renderTable() string {
 	// scan lands (unlike a user-initiated kill, which deliberately delays
 	// its rescan — see handleKillResult), so a still-dissolving removed
 	// row has to be appended here rather than found in the normal loop.
+	// Only room left in the current window gets one, since they're
+	// transient anyway and must not push the box past its fixed height.
 	for _, s := range fadingExtra {
+		if visible >= 0 && rendered >= visible {
+			break
+		}
 		if rendered > 0 {
 			b.WriteString("\n")
 		}
@@ -234,6 +289,29 @@ func (m Model) hintBar() string {
 	case modeKilling, modeRestarting:
 		return "working…"
 	default:
-		return "↑↓ nav · space select · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
+		hints := "↑↓ nav · space select · k kill · K force · / filter · w watch · r refresh · ? help · q quit"
+		if pos := m.scrollPosition(); pos != "" {
+			hints = pos + " · " + hints
+		}
+		return hints
 	}
+}
+
+// scrollPosition returns a "12-19/40" indicator when the table is windowed
+// to fewer rows than m.filtered holds, so a scrolled list still tells the
+// user how much more there is and where the visible slice sits — otherwise
+// a fixed-height box with no indicator would look truncated rather than
+// scrollable. Empty string when everything fits (nothing to indicate) or
+// the terminal size isn't known yet (visibleRows()==-1).
+func (m Model) scrollPosition() string {
+	visible := m.visibleRows()
+	if visible < 0 || len(m.filtered) <= visible {
+		return ""
+	}
+	start := m.listOffset + 1
+	end := m.listOffset + visible
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+	return fmt.Sprintf("%d-%d/%d", start, end, len(m.filtered))
 }

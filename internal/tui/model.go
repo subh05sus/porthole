@@ -84,9 +84,10 @@ type Model struct {
 	// (see model_test.go) instead of racing real wall-clock time.
 	clock func() time.Time
 
-	services []scan.Service
-	filtered []scan.Service
-	cursor   int
+	services   []scan.Service
+	filtered   []scan.Service
+	cursor     int
+	listOffset int // index of the first filtered row currently drawn, keeps the table a fixed height instead of overflowing the terminal
 
 	filterInput  textinput.Model
 	confirmInput textinput.Model // typed-port confirmation for protected ports
@@ -396,6 +397,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.ensureCursorVisible()
 		return m, nil
 
 	case scanCompleteMsg:
@@ -576,6 +578,37 @@ func (m *Model) applyFilter() {
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
+	}
+	m.ensureCursorVisible()
+}
+
+// ensureCursorVisible slides listOffset so the cursor row stays within the
+// window renderTable will actually draw, and clamps it back into range
+// after the filtered list shrinks (e.g. a filter narrows the results) or
+// the terminal is resized. A visibleRows() of -1 (terminal size not yet
+// known, e.g. in tests that never send a WindowSizeMsg) means "unbounded":
+// nothing to clamp against, so offset just stays 0.
+func (m *Model) ensureCursorVisible() {
+	visible := m.visibleRows()
+	if visible < 0 {
+		m.listOffset = 0
+		return
+	}
+	if m.cursor < m.listOffset {
+		m.listOffset = m.cursor
+	}
+	if m.cursor >= m.listOffset+visible {
+		m.listOffset = m.cursor - visible + 1
+	}
+	maxOffset := len(m.filtered) - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.listOffset > maxOffset {
+		m.listOffset = maxOffset
+	}
+	if m.listOffset < 0 {
+		m.listOffset = 0
 	}
 }
 
